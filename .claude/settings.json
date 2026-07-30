@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pip install -r backend/requirements.txt)",
+      "Bash(PYTHONPATH=. python -c ' *)",
+      "Bash(PYTHONPATH=. python -m backend.scripts.smoke_crawl)",
+      "Bash(PYTHONPATH=. python -m backend.scripts.smoke_local)",
+      "Bash(python cli/aeo.py --help)",
+      "Bash(PYTHONPATH=. python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --log-level warning)",
+      "Bash(PYTHONPATH=. python -m backend.scripts.fixture_server 8765)",
+      "Bash(python cli/aeo.py -p 8000 crawl http://127.0.0.1:8765/ --max-pages 10 --max-depth 3 --delay-ms 0)",
+      "Bash(python cli/aeo.py -p 8000 scans)",
+      "Bash(python cli/aeo.py -p 8000 scan-show 4)",
+      "Bash(python cli/aeo.py -p 8000 pages 4)",
+      "Bash(python cli/aeo.py -p 8000 pages 4 --type faq)",
+      "Bash(python cli/aeo.py -p 8000 chunks 4 --page-id 5)",
+      "Bash(python cli/aeo.py -p 8000 chunks 4)",
+      "Bash(python cli/aeo.py -p 8000 status)"
+    ]
+  }
+}

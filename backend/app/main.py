@@ -1,4 +1,4 @@
-import os
+﻿import os
 import json
 import logging
 import time
@@ -22,6 +22,11 @@ from backend.app.agents import (
     run_agent_workflow,
     is_api_configured
 )
+from backend.app import db as sqlite_db
+from backend.app import crawler as crawler_mod
+from backend.app import test_runner as test_runner_mod
+from backend.app import llm as llm_mod
+from backend.app import gap_analyzer as gap_analyzer_mod
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -108,6 +113,12 @@ class GitHubConfigReq(BaseModel):
     repo: str
     branch: Optional[str] = "main"
     token: Optional[str] = None
+
+class CrawlRequest(BaseModel):
+    root_url: str
+    max_pages: Optional[int] = 25
+    max_depth: Optional[int] = 2
+    per_host_delay_ms: Optional[int] = 200
 
 @app.get("/api/agents", response_model=List[AgentCard])
 def list_registered_agents():
@@ -612,6 +623,232 @@ async def create_github_pr(req: FixRequest):
             "branch": new_branch,
             "updated_score": db["metrics"]["overall_aeo_score"]
         }
+
+# --- Phase 1 crawler endpoints ---
+
+@app.post("/api/crawl")
+def start_crawl(req: CrawlRequest):
+    """Kick off a synchronous crawl of `root_url`. Phase 1 runs in-process
+    with conservative caps (default 25 pages, depth 2, 200ms delay). Returns
+    the resulting scan row.
+    """
+    logger.info("crawl request: %s (max_pages=%s, max_depth=%s)",
+                req.root_url, req.max_pages, req.max_depth)
+    cfg = {
+        "max_pages": req.max_pages,
+        "max_depth": req.max_depth,
+        "per_host_delay_ms": req.per_host_delay_ms,
+    }
+    scan = crawler_mod.run_crawl(req.root_url, cfg)
+    return JSONResponse(content={"status": scan.get("status", "unknown"), "scan": _serialize_scan(scan)})
+
+
+@app.get("/api/scans")
+def list_scans(limit: int = 50):
+    return JSONResponse(content={"scans": sqlite_db.list_scans(limit=limit)})
+
+
+@app.get("/api/scans/{scan_id}")
+def get_scan(scan_id: int):
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    payload = _serialize_scan(scan)
+    payload["page_type_breakdown"] = sqlite_db.page_type_breakdown(scan_id)
+    return JSONResponse(content=payload)
+
+
+@app.get("/api/scans/{scan_id}/pages")
+def list_scan_pages(scan_id: int, page_type: Optional[str] = None, limit: int = 500):
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    rows = sqlite_db.list_pages(scan_id, page_type=page_type, limit=limit)
+    return JSONResponse(content={"scan_id": scan_id, "pages": rows})
+
+
+@app.get("/api/scans/{scan_id}/chunks")
+def list_scan_chunks(scan_id: int, page_id: Optional[int] = None, limit: int = 500):
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    rows = sqlite_db.list_chunks(scan_id, page_id=page_id, limit=limit)
+    return JSONResponse(content={"scan_id": scan_id, "chunks": rows})
+
+
+@app.get("/api/pages/{page_id}")
+def get_page_detail(page_id: int):
+    page = sqlite_db.get_page(page_id)
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    chunks = sqlite_db.list_chunks(page["scan_id"], page_id=page_id, limit=2000)
+    return JSONResponse(content={"page": page, "chunks": chunks})
+
+
+@app.get("/api/chunks/{chunk_id}")
+def get_chunk_detail(chunk_id: int):
+    chunk = sqlite_db.get_chunk(chunk_id)
+    if not chunk:
+        raise HTTPException(status_code=404, detail="Chunk not found")
+    return JSONResponse(content={"chunk": chunk})
+
+
+@app.get("/api/scans/{scan_id}/gaps")
+def list_scan_gaps(scan_id: int):
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    gaps = gap_analyzer_mod.analyze(scan_id)
+    return JSONResponse(content={"scan_id": scan_id, "gaps": gaps})
+
+
+def _serialize_scan(scan: dict) -> dict:
+    """Parse JSON-encoded config_json back into a dict for the response."""
+    import json as _json
+    out = dict(scan)
+    cfg = out.pop("config_json", None)
+    if cfg:
+        try:
+            out["config"] = _json.loads(cfg)
+        except Exception:
+            out["config"] = None
+    else:
+        out["config"] = None
+    return out
+
+
+
+# --- Phase 3 multi-LLM test endpoints ---
+
+class TestRunRequest(BaseModel):
+    scan_id: int
+    brand: Optional[str] = None
+    domain: Optional[str] = None
+    competitors: Optional[List[str]] = None
+
+@app.post("/api/test/run")
+async def test_run(req: TestRunRequest):
+    """Run the full multi-LLM test pipeline for a scan."""
+    scan = sqlite_db.get_scan(req.scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Clear previous answers for this scan so runs are idempotent
+    sqlite_db.delete_answers_for_scan(req.scan_id)
+
+    try:
+        art = await test_runner_mod.run_test(
+            req.scan_id,
+            brand=req.brand or "",
+            domain=req.domain or "",
+            competitors=req.competitors or [],
+        )
+        status = "success" if not art.errors else "partial"
+        return JSONResponse(content={
+            "status": status,
+            "scan_id": art.scan_id,
+            "providers": art.adapters_used,
+            "questions_generated": art.questions_generated,
+            "answers_generated": art.answers_generated,
+            "errors": art.errors,
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.get("/api/test/{scan_id}/summary")
+def test_summary(scan_id: int):
+    """Aggregated multi-LLM scores for a scan."""
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    from collections import defaultdict
+
+    questions = sqlite_db.list_questions(scan_id)
+    scores = sqlite_db.scores_for_scan(scan_id)
+
+    # per-provider aggregates
+    agg: dict[str, dict] = defaultdict(lambda: {
+        "total": 0, "errors": 0,
+        "conf_sum": 0.0, "attr_sum": 0.0, "hedge_sum": 0.0,
+        "brand_hits": 0, "domain_citations": 0, "competitor_hits": 0,
+        "refusal_count": 0, "accuracy_sum": 0.0, "accuracy_count": 0,
+    })
+    for row in scores:
+        p = row["provider"]
+        d = agg[p]
+        d["total"] += 1
+        if row.get("error"):
+            d["errors"] += 1
+        d["conf_sum"] += row.get("confidence", 0) or 0
+        d["attr_sum"] += row.get("attribution", 0) or 0
+        d["hedge_sum"] += row.get("hedge_rate", 0) or 0
+        d["brand_hits"] += row.get("has_brand_mention", 0) or 0
+        d["domain_citations"] += row.get("has_domain_citation", 0) or 0
+        d["competitor_hits"] += row.get("has_competitor_mention", 0) or 0
+        d["refusal_count"] += row.get("is_refusal", 0) or 0
+        if row.get("accuracy") is not None:
+            d["accuracy_sum"] += row["accuracy"]
+            d["accuracy_count"] += 1
+
+    per_provider = {}
+    for provider, d in agg.items():
+        n = d["total"] or 1
+        per_provider[provider] = {
+            "total_answers": d["total"],
+            "errors": d["errors"],
+            "avg_confidence": round(d["conf_sum"] / n, 3),
+            "avg_attribution": round(d["attr_sum"] / n, 3),
+            "avg_hedge_rate": round(d["hedge_sum"] / n, 3),
+            "brand_mention_rate": round(d["brand_hits"] / n, 3),
+            "domain_citation_rate": round(d["domain_citations"] / n, 3),
+            "competitor_mention_rate": round(d["competitor_hits"] / n, 3),
+            "refusal_rate": round(d["refusal_count"] / n, 3),
+        }
+        if d["accuracy_count"]:
+            per_provider[provider]["avg_accuracy"] = round(
+                d["accuracy_sum"] / d["accuracy_count"], 3)
+
+    return JSONResponse({
+        "scan_id": scan_id,
+        "question_count": len(questions),
+        "per_provider": per_provider,
+    })
+
+
+@app.get("/api/test/{scan_id}/questions")
+def test_questions(scan_id: int):
+    """Return questions generated for a test run."""
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    qs = sqlite_db.list_questions(scan_id)
+    return JSONResponse({"scan_id": scan_id, "questions": qs})
+
+
+@app.get("/api/test/{scan_id}/answers")
+def test_answers(scan_id: int, provider: Optional[str] = None, limit: int = 500):
+    """Return answers (with scores) for a test run."""
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    answers = sqlite_db.list_answers(scan_id, provider=provider, limit=limit)
+    return JSONResponse({"scan_id": scan_id, "answers": answers})
+
+
+@app.delete("/api/test/{scan_id}")
+def test_delete(scan_id: int):
+    """Delete all test results for a scan (cascades to answers + scores)."""
+    count = sqlite_db.delete_answers_for_scan(scan_id)
+    return JSONResponse({"scan_id": scan_id, "deleted_answers": count})
+
+
+@app.get("/api/test/keys")
+def test_keys():
+    """Diagnostics: which LLM provider keys are currently configured."""
+    from backend.app.llm import key_status
+    return JSONResponse(key_status())
 
 # Serving Next.js static build files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")

@@ -20,6 +20,8 @@ out/
 .env.local
 .env.*.local
 backend/app/db.json
+backend/app/nayana.db
+backend/app/nayana.db-*
 
 # Local temp files / system files
 .DS_Store
