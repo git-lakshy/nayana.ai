@@ -94,16 +94,18 @@ async def _gen_qs_for_chunk(chunk_text: str) -> list[str]:
 async def generate_questions(scan_id: int,
                              max_per_chunk: int = 4,
                              max_total: int = 50) -> list[str]:
-    """Aggregate questions from all chunks of a scan."""
+    """
+    Generate domain-specific questions from the actual crawled chunks of a scan.
+
+    Raises ValueError if there are no chunks to analyse — there is no generic
+    fallback; questions must be grounded in the real crawled content.
+    """
     chunks = sqlite_db.list_chunks(scan_id, limit=500)
     if not chunks:
-        return [
-            "What products does this site offer?",
-            "How do I get started with this platform?",
-            "What integrations are available?",
-            "Is there API documentation?",
-            "What are the deployment options?",
-        ]
+        raise ValueError(
+            f"Scan {scan_id} has no chunks. Run a crawl first (aeo crawl <url>) "
+            "so there is real content to generate questions from."
+        )
 
     qset: dict[str, bool] = {}
     for ch in chunks:
@@ -121,13 +123,13 @@ async def generate_questions(scan_id: int,
         if len(qset) >= max_total:
             break
 
-    result = list(qset.keys())
-    if not result:
-        result = [
-            "What does this product do?",
-            "How can I integrate this API?",
-        ]
-    return result[:max_total]
+    if not qset:
+        raise ValueError(
+            f"Scan {scan_id}: Gemini ADK question generation returned no results. "
+            "Check GEMINI_API_KEY / GOOGLE_API_KEY is set and the ADK is installed."
+        )
+
+    return list(qset.keys())[:max_total]
 
 
 async def _call_adapter(adapter, prompt: str) -> llm.ProviderResult:

@@ -354,6 +354,185 @@ def run_gaps_list(api_url: str, scan_id: int):
         print()
 
 
+def run_fixes_generate(api_url: str, scan_id: int, force: bool):
+    print_header(f"FIXES  ·  Generate  ·  Scan #{scan_id}")
+    qs = "?force=true" if force else ""
+    payload = make_request(api_url, f"scans/{scan_id}/fixes/generate{qs}", method="POST")
+    fixes = payload.get("fixes", [])
+    print(f"{COLOR_GREEN}Generated {payload.get('generated', 0)} fix(es).{COLOR_RESET}\n")
+    _print_fixes(fixes)
+
+
+def run_fixes_list(api_url: str, scan_id: int, status: Optional[str]):
+    print_header(f"FIXES  ·  Scan #{scan_id}" + (f"  ·  status={status}" if status else ""))
+    qs = f"?status={status}" if status else ""
+    payload = make_request(api_url, f"scans/{scan_id}/fixes{qs}")
+    fixes = payload.get("fixes", [])
+    if not fixes:
+        print(f"{COLOR_YELLOW}No fixes found. Run `aeo fixes generate {scan_id}` first.{COLOR_RESET}")
+        return
+    print(f"{COLOR_BOLD}{payload.get('total', len(fixes))} fix(es):{COLOR_RESET}\n")
+    _print_fixes(fixes)
+
+
+def _print_fixes(fixes: list):
+    for fix in fixes:
+        sev = fix.get("severity", "")
+        color = COLOR_RED if sev == "high" else COLOR_YELLOW if sev == "medium" else COLOR_BLUE
+        status = fix.get("status", "?")
+        status_color = COLOR_GREEN if status == "applied" else COLOR_YELLOW if status == "pending" else COLOR_PURPLE
+        print(f"{color}[{(sev or '?').upper():6}] #{fix.get('id')} {fix.get('title')}{COLOR_RESET}")
+        print(f"  Status:   {status_color}{status}{COLOR_RESET}")
+        print(f"  Type:     {fix.get('fix_type')}")
+        print(f"  File:     {fix.get('file_hint') or '(no file hint)'}")
+        print(f"  Desc:     {(fix.get('description') or '')[:120]}")
+        print()
+
+
+def run_fix_show(api_url: str, scan_id: int, fix_id: int):
+    print_header(f"FIX #{fix_id}  ·  Scan #{scan_id}")
+    payload = make_request(api_url, f"scans/{scan_id}/fixes/{fix_id}")
+    fix = payload.get("fix", {})
+    print(f" {COLOR_BOLD}{'Title':<14}{COLOR_RESET} {fix.get('title')}")
+    print(f" {COLOR_BOLD}{'Type':<14}{COLOR_RESET} {fix.get('fix_type')}")
+    print(f" {COLOR_BOLD}{'Severity':<14}{COLOR_RESET} {fix.get('severity')}")
+    print(f" {COLOR_BOLD}{'Status':<14}{COLOR_RESET} {fix.get('status')}")
+    print(f" {COLOR_BOLD}{'File hint':<14}{COLOR_RESET} {fix.get('file_hint') or '(none)'}")
+    print(f" {COLOR_BOLD}{'Language':<14}{COLOR_RESET} {fix.get('language') or '(none)'}")
+    print(f"\n{COLOR_BOLD}Description:{COLOR_RESET}\n{fix.get('description')}")
+    print(f"\n{COLOR_BOLD}Content:{COLOR_RESET}")
+    print(fix.get("content", ""))
+
+
+def run_fix_apply(api_url: str, scan_id: int, fix_id: int):
+    print_header(f"APPLY FIX #{fix_id}  ·  Scan #{scan_id}")
+    payload = make_request(api_url, f"scans/{scan_id}/fixes/{fix_id}/apply", method="POST")
+    fix = payload.get("fix", {})
+    print(f"{COLOR_GREEN}[OK] Fix marked as applied.{COLOR_RESET}")
+    print(f"  #{fix.get('id')} {fix.get('title')}")
+    print(f"  Applied at: {fix.get('applied_at')}")
+
+
+def run_fix_dismiss(api_url: str, scan_id: int, fix_id: int):
+    print_header(f"DISMISS FIX #{fix_id}  ·  Scan #{scan_id}")
+    payload = make_request(api_url, f"scans/{scan_id}/fixes/{fix_id}/dismiss", method="POST")
+    print(f"{COLOR_YELLOW}[OK] Fix dismissed.{COLOR_RESET}")
+
+
+def run_score(api_url: str, scan_id: int):
+    print_header(f"AI VISIBILITY SCORE  ·  Scan #{scan_id}")
+    payload = make_request(api_url, f"scans/{scan_id}/score")
+
+    score = payload.get("ai_coverage_score", 0)
+    bar_len = int(score / 5)
+    bar = "#" * bar_len + "-" * (20 - bar_len)
+    score_color = COLOR_GREEN if score >= 70 else COLOR_YELLOW if score >= 40 else COLOR_RED
+
+    print(f"  {COLOR_BOLD}AI Visibility Score:{COLOR_RESET} {score_color}{COLOR_BOLD}{score}%{COLOR_RESET}  |{bar}|\n")
+
+    bd = payload.get("breakdown", {})
+    print(f"{COLOR_BOLD}Score Breakdown:{COLOR_RESET}")
+    print(f"  Base score:              100")
+    print(f"  {COLOR_RED}Penalty (high gaps):    -{bd.get('penalty_high_gaps', 0)}{COLOR_RESET}")
+    print(f"  {COLOR_YELLOW}Penalty (medium gaps):  -{bd.get('penalty_medium_gaps', 0)}{COLOR_RESET}")
+    print(f"  {COLOR_BLUE}Penalty (low gaps):     -{bd.get('penalty_low_gaps', 0)}{COLOR_RESET}")
+    print(f"  {COLOR_GREEN}Bonus (confidence):    +{bd.get('bonus_confidence', 0)}{COLOR_RESET}")
+    print(f"  {COLOR_GREEN}Bonus (attribution):   +{bd.get('bonus_attribution', 0)}{COLOR_RESET}")
+
+    gs = payload.get("gap_summary", {})
+    print(f"\n{COLOR_BOLD}Gap Summary:{COLOR_RESET}")
+    print(f"  Total: {gs.get('total')}  High: {COLOR_RED}{gs.get('high')}{COLOR_RESET}  Medium: {COLOR_YELLOW}{gs.get('medium')}{COLOR_RESET}  Low: {COLOR_BLUE}{gs.get('low')}{COLOR_RESET}")
+
+    llm = payload.get("llm_signal", {})
+    print(f"\n{COLOR_BOLD}LLM Signal:{COLOR_RESET}")
+    if llm.get("has_test_data"):
+        print(f"  Avg Confidence:  {COLOR_CYAN}{llm.get('avg_confidence')}{COLOR_RESET}")
+        print(f"  Avg Attribution: {COLOR_CYAN}{llm.get('avg_attribution')}{COLOR_RESET}")
+        if llm.get("avg_accuracy") is not None:
+            print(f"  Avg Accuracy:    {COLOR_CYAN}{llm.get('avg_accuracy')}{COLOR_RESET}")
+    else:
+        print(f"  {COLOR_YELLOW}No LLM test data yet. Run `aeo test <scan_id>` to add signal.{COLOR_RESET}")
+
+    fx = payload.get("fixes", {})
+    print(f"\n{COLOR_BOLD}Fixes:{COLOR_RESET}  {fx.get('applied')} applied / {fx.get('pending')} pending")
+
+
+def run_history(api_url: str, domain: str):
+    print_header(f"SCORE HISTORY  ·  {domain}")
+    payload = make_request(api_url, f"domains/{domain}/history")
+    rows = payload.get("history", [])
+    if not rows:
+        print(f"{COLOR_YELLOW}No score history for {domain}. Run `aeo score <scan_id>` to record one.{COLOR_RESET}")
+        return
+    print(f"{COLOR_BOLD}{'Date':<22} {'Score':>6}  Chart{COLOR_RESET}")
+    print("-" * 60)
+    for row in rows:
+        score = row.get("ai_coverage_score") or 0
+        bar_len = int(score / 4)
+        bar = "#" * bar_len + "-" * (25 - bar_len)
+        score_color = COLOR_GREEN if score >= 70 else COLOR_YELLOW if score >= 40 else COLOR_RED
+        print(f"  {COLOR_CYAN}{row.get('recorded_at', '')[:19]}{COLOR_RESET}  {score_color}{score:>6.1f}%{COLOR_RESET}  |{bar}|")
+    print()
+
+
+def run_sov(api_url: str, scan_id: int):
+    print_header(f"SHARE-OF-VOICE  ·  Scan #{scan_id}")
+    payload = make_request(api_url, f"sov/{scan_id}")
+    if "error" in payload:
+        print(f"{COLOR_RED}Error: {payload['error']}{COLOR_RESET}")
+        return
+
+    overall = payload.get("overall_target_sov", 0)
+    brand = payload.get("overall_target_brand_mention_rate", 0)
+    print(f"  Target URL: {COLOR_CYAN}{payload.get('target_url')}{COLOR_RESET}")
+    print(f"  Competitors: {payload.get('competitor_count', 0)}")
+    print(f"  Brand Mention Rate: {COLOR_GREEN}{brand:.1%}{COLOR_RESET}")
+    sov_color = COLOR_GREEN if overall >= 0.5 else COLOR_YELLOW if overall >= 0.3 else COLOR_RED
+    print(f"  Overall SOV: {sov_color}{COLOR_BOLD}{overall:.1%}{COLOR_RESET}\n")
+
+    sov_by_provider = payload.get("sov_by_provider", {})
+    if sov_by_provider:
+        print(f"{COLOR_BOLD}Per-Provider SOV:{COLOR_RESET}")
+        for provider, data in sov_by_provider.items():
+            sov = data.get("target_sov", 0)
+            bar_len = int(sov * 20)
+            bar = "#" * bar_len + "-" * (20 - bar_len)
+            sov_c = COLOR_GREEN if sov >= 0.5 else COLOR_YELLOW
+            print(f"  {COLOR_BLUE}{provider:<12}{COLOR_RESET} SOV={sov_c}{sov:.1%}{COLOR_RESET}  |{bar}|  brand={data.get('target_brand_mention_rate', 0):.1%}")
+    else:
+        print(f"{COLOR_YELLOW}No per-provider data. Run `aeo test <scan_id>` first.{COLOR_RESET}")
+
+
+def run_sov_link(api_url: str, parent_scan_id: int, competitor_scan_id: int, competitor_url: str):
+    print_header("LINK COMPETITOR SCAN")
+    payload = make_request(api_url, "sov/link", method="POST", data={
+        "parent_scan_id": parent_scan_id,
+        "competitor_scan_id": competitor_scan_id,
+        "competitor_url": competitor_url,
+    })
+    print(f"{COLOR_GREEN}[OK] Linked scan #{competitor_scan_id} ({competitor_url}) as competitor of scan #{parent_scan_id}.{COLOR_RESET}")
+
+
+def run_test(api_url: str, scan_id: int, brand: str, domain: str):
+    print_header(f"MULTI-LLM TEST  ·  Scan #{scan_id}")
+    print(f"{COLOR_YELLOW}Running test pipeline... (this may take a moment){COLOR_RESET}")
+    payload = make_request(api_url, "test/run", method="POST", data={
+        "scan_id": scan_id,
+        "brand": brand,
+        "domain": domain,
+    })
+    status = payload.get("status", "?")
+    status_color = COLOR_GREEN if status == "success" else COLOR_YELLOW
+    print(f"\n{status_color}[{status.upper()}]{COLOR_RESET}")
+    print(f"  Questions generated: {COLOR_CYAN}{payload.get('questions_generated')}{COLOR_RESET}")
+    print(f"  Answers generated:   {COLOR_CYAN}{payload.get('answers_generated')}{COLOR_RESET}")
+    print(f"  Providers used:      {COLOR_CYAN}{', '.join(payload.get('providers', []))}{COLOR_RESET}")
+    errors = payload.get("errors", [])
+    if errors:
+        print(f"  {COLOR_YELLOW}Errors: {errors}{COLOR_RESET}")
+    print(f"\nNext: `aeo score {scan_id}` to compute your AI visibility score.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="A-EYE Command Line Swarm Utility.")
     parser.add_argument("-p", "--port", type=int, default=8000, help="FastAPI server port (default: 8000)")
@@ -403,6 +582,49 @@ def main():
     gaps_parser = subparsers.add_parser("gaps", help="List heuristic content gaps for a scan.")
     gaps_parser.add_argument("scan_id", type=int, help="Scan ID.")
 
+    # --- Phase 5: Fix Generator ---
+    fixes_parser = subparsers.add_parser("fixes", help="List generated fixes for a scan.")
+    fixes_parser.add_argument("scan_id", type=int, help="Scan ID.")
+    fixes_parser.add_argument("--status", type=str, default=None, help="Filter by status: pending | applied | dismissed.")
+
+    fixes_gen_parser = subparsers.add_parser("fixes-generate", help="Generate (or regenerate) fixes for all gaps in a scan.")
+    fixes_gen_parser.add_argument("scan_id", type=int, help="Scan ID.")
+    fixes_gen_parser.add_argument("--force", action="store_true", help="Regenerate even if fixes already exist.")
+
+    fix_show_parser = subparsers.add_parser("fix-show", help="Show full content of a specific fix.")
+    fix_show_parser.add_argument("scan_id", type=int, help="Scan ID.")
+    fix_show_parser.add_argument("fix_id", type=int, help="Fix ID.")
+
+    fix_apply_parser = subparsers.add_parser("fix-apply", help="Mark a fix as applied.")
+    fix_apply_parser.add_argument("scan_id", type=int, help="Scan ID.")
+    fix_apply_parser.add_argument("fix_id", type=int, help="Fix ID.")
+
+    fix_dismiss_parser = subparsers.add_parser("fix-dismiss", help="Dismiss a fix (hide from pending list).")
+    fix_dismiss_parser.add_argument("scan_id", type=int, help="Scan ID.")
+    fix_dismiss_parser.add_argument("fix_id", type=int, help="Fix ID.")
+
+    # --- Phase 7: Score & History ---
+    score_parser = subparsers.add_parser("score", help="Compute the AI visibility score for a scan.")
+    score_parser.add_argument("scan_id", type=int, help="Scan ID.")
+
+    history_parser = subparsers.add_parser("history", help="Show score history trend for a domain.")
+    history_parser.add_argument("domain", type=str, help="Domain (e.g. example.com).")
+
+    # --- Phase 6: SOV ---
+    sov_parser = subparsers.add_parser("sov", help="Show share-of-voice comparison for a scan.")
+    sov_parser.add_argument("scan_id", type=int, help="Scan ID.")
+
+    sov_link_parser = subparsers.add_parser("sov-link", help="Link a competitor scan for SOV comparison.")
+    sov_link_parser.add_argument("scan_id", type=int, help="Parent (target) scan ID.")
+    sov_link_parser.add_argument("competitor_scan_id", type=int, help="Competitor scan ID.")
+    sov_link_parser.add_argument("competitor_url", type=str, help="Competitor root URL.")
+
+    # --- Phase 3: Multi-LLM Test ---
+    test_parser = subparsers.add_parser("test", help="Run the multi-LLM test pipeline for a scan.")
+    test_parser.add_argument("scan_id", type=int, help="Scan ID.")
+    test_parser.add_argument("--brand", type=str, default="", help="Brand name to track in answers.")
+    test_parser.add_argument("--domain", type=str, default="", help="Domain to track in citations.")
+
     args = parser.parse_args()
     
     # Determine base url
@@ -419,7 +641,7 @@ def main():
     elif args.command == "status":
         run_status(api_url)
     elif args.command == "history":
-        run_history(api_url)
+        run_history(api_url, args.domain)
     elif args.command == "crawl":
         run_crawl(api_url, args.url,
                   max_pages=args.max_pages,
@@ -435,6 +657,24 @@ def main():
         run_chunks_list(api_url, args.scan_id, args.page_id, args.limit)
     elif args.command == "gaps":
         run_gaps_list(api_url, args.scan_id)
+    elif args.command == "fixes":
+        run_fixes_list(api_url, args.scan_id, args.status)
+    elif args.command == "fixes-generate":
+        run_fixes_generate(api_url, args.scan_id, args.force)
+    elif args.command == "fix-show":
+        run_fix_show(api_url, args.scan_id, args.fix_id)
+    elif args.command == "fix-apply":
+        run_fix_apply(api_url, args.scan_id, args.fix_id)
+    elif args.command == "fix-dismiss":
+        run_fix_dismiss(api_url, args.scan_id, args.fix_id)
+    elif args.command == "score":
+        run_score(api_url, args.scan_id)
+    elif args.command == "sov":
+        run_sov(api_url, args.scan_id)
+    elif args.command == "sov-link":
+        run_sov_link(api_url, args.scan_id, args.competitor_scan_id, args.competitor_url)
+    elif args.command == "test":
+        run_test(api_url, args.scan_id, args.brand, args.domain)
     else:
         parser.print_help()
 

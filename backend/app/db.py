@@ -123,6 +123,55 @@ CREATE INDEX IF NOT EXISTS idx_questions_chunk_id   ON questions(chunk_id);
 CREATE INDEX IF NOT EXISTS idx_answers_scan_id      ON answers(scan_id);
 CREATE INDEX IF NOT EXISTS idx_answers_question_id  ON answers(question_id);
 CREATE INDEX IF NOT EXISTS idx_answers_provider     ON answers(provider);
+
+CREATE TABLE IF NOT EXISTS fixes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+    page_id INTEGER REFERENCES pages(id) ON DELETE SET NULL,
+    gap_id TEXT NOT NULL,
+    gap_type TEXT NOT NULL,
+    severity TEXT,
+    fix_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    title TEXT NOT NULL,
+    description TEXT,
+    content TEXT NOT NULL,
+    language TEXT,
+    file_hint TEXT,
+    created_at TEXT NOT NULL,
+    applied_at TEXT,
+    UNIQUE(scan_id, gap_id)
+);
+
+CREATE TABLE IF NOT EXISTS score_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+    domain TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    gap_count INTEGER NOT NULL DEFAULT 0,
+    high_severity_gaps INTEGER NOT NULL DEFAULT 0,
+    medium_severity_gaps INTEGER NOT NULL DEFAULT 0,
+    low_severity_gaps INTEGER NOT NULL DEFAULT 0,
+    fix_count INTEGER NOT NULL DEFAULT 0,
+    applied_fix_count INTEGER NOT NULL DEFAULT 0,
+    avg_confidence REAL,
+    avg_attribution REAL,
+    avg_accuracy REAL,
+    ai_coverage_score REAL,
+    UNIQUE(scan_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fixes_scan_id           ON fixes(scan_id);
+CREATE INDEX IF NOT EXISTS idx_score_history_domain    ON score_history(domain);
+
+CREATE TABLE IF NOT EXISTS competitor_scans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+    competitor_scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+    competitor_url TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(parent_scan_id, competitor_scan_id)
+);
 """
 
 
@@ -482,6 +531,104 @@ def delete_answers_for_scan(scan_id: int) -> int:
     """Used so a re-run of /api/test/run starts fresh. Cascades to scores."""
     cur = get_conn().execute("DELETE FROM answers WHERE scan_id = ?", (scan_id,))
     return cur.rowcount
+
+
+# ----- fixes (Phase 5) -----
+
+def upsert_fixes(scan_id: int, fixes: list[dict], force: bool = False) -> None:
+    """Insert fixes; if force=True, delete existing first."""
+    if force:
+        get_conn().execute("DELETE FROM fixes WHERE scan_id = ?", (scan_id,))
+    with transaction() as conn:
+        for f in fixes:
+            conn.execute(
+                """INSERT OR IGNORE INTO fixes
+                       (scan_id, page_id, gap_id, gap_type, severity, fix_type,
+                        status, title, description, content, language, file_hint, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)""",
+                (
+                    scan_id, f.get("page_id"), f["gap_id"],
+                    f["gap_type"], f.get("severity"),
+                    f["fix_type"], f["title"],
+                    f.get("description"), f["content"],
+                    f.get("language"), f.get("file_hint"),
+                    now_iso(),
+                ),
+            )
+
+
+def list_fixes(scan_id: int, status: Optional[str] = None) -> list[dict]:
+    sql = ("SELECT id, scan_id, page_id, gap_id, gap_type, severity, fix_type, "
+           "status, title, description, content, language, file_hint, "
+           "created_at, applied_at FROM fixes WHERE scan_id = ?")
+    params: list = [scan_id]
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    sql += " ORDER BY id"
+    cur = get_conn().execute(sql, params)
+    return [_row_to_dict(r) for r in cur.fetchall()]
+
+
+def get_fix(fix_id: int, scan_id: int) -> Optional[dict]:
+    cur = get_conn().execute(
+        "SELECT * FROM fixes WHERE id = ? AND scan_id = ?",
+        (fix_id, scan_id),
+    )
+    row = cur.fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def update_fix_status(fix_id: int, status: str) -> None:
+    applied_at = now_iso() if status == "applied" else None
+    get_conn().execute(
+        "UPDATE fixes SET status = ?, applied_at = ? WHERE id = ?",
+        (status, applied_at, fix_id),
+    )
+
+
+# ----- score history (Phase 7) -----
+
+def upsert_score_history(
+    scan_id: int, domain: str,
+    gap_count: int, high_severity_gaps: int,
+    medium_severity_gaps: int, low_severity_gaps: int,
+    fix_count: int, applied_fix_count: int,
+    avg_confidence: Optional[float], avg_attribution: Optional[float],
+    avg_accuracy: Optional[float], ai_coverage_score: float,
+) -> None:
+    get_conn().execute(
+        """INSERT OR REPLACE INTO score_history
+               (scan_id, domain, recorded_at, gap_count, high_severity_gaps,
+                medium_severity_gaps, low_severity_gaps, fix_count,
+                applied_fix_count, avg_confidence, avg_attribution,
+                avg_accuracy, ai_coverage_score)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (scan_id, domain, now_iso(), gap_count, high_severity_gaps,
+         medium_severity_gaps, low_severity_gaps, fix_count,
+         applied_fix_count, avg_confidence, avg_attribution,
+         avg_accuracy, ai_coverage_score),
+    )
+
+
+def get_score_history(domain: str, limit: int = 50) -> list[dict]:
+    cur = get_conn().execute(
+        """SELECT sh.*, s.root_url, s.started_at AS scan_started_at
+           FROM score_history sh
+           JOIN scans s ON s.id = sh.scan_id
+           WHERE sh.domain = ?
+           ORDER BY sh.recorded_at ASC
+           LIMIT ?""",
+        (domain, limit),
+    )
+    return [_row_to_dict(r) for r in cur.fetchall()]
+
+
+def list_all_domains() -> list[str]:
+    cur = get_conn().execute(
+        "SELECT DISTINCT domain FROM score_history ORDER BY domain"
+    )
+    return [r["domain"] for r in cur.fetchall()]
 
 
 # ----- internal -----

@@ -27,6 +27,9 @@ from backend.app import crawler as crawler_mod
 from backend.app import test_runner as test_runner_mod
 from backend.app import llm as llm_mod
 from backend.app import gap_analyzer as gap_analyzer_mod
+from backend.app import fix_generator as fix_generator_mod
+from backend.app import sov as sov_mod
+from backend.app import scoring_engine as scoring_engine_mod
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -849,6 +852,167 @@ def test_keys():
     """Diagnostics: which LLM provider keys are currently configured."""
     from backend.app.llm import key_status
     return JSONResponse(key_status())
+
+# --- Health check ---
+
+@app.get("/api/health")
+def health():
+    return JSONResponse({"status": "ok", "version": "1.0.0"})
+
+
+# --- Phase 5: Fix Generator ---
+
+class FixStatusUpdate(BaseModel):
+    status: str  # applied | dismissed | pending
+
+
+@app.get("/api/scans/{scan_id}/fixes")
+def list_fixes(scan_id: int, status: Optional[str] = None):
+    """List all generated fixes for a scan, optionally filtered by status."""
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    fixes = sqlite_db.list_fixes(scan_id, status=status)
+    return JSONResponse({"scan_id": scan_id, "fixes": fixes, "total": len(fixes)})
+
+
+@app.post("/api/scans/{scan_id}/fixes/generate")
+def generate_fixes(scan_id: int, force: bool = False):
+    """Generate (or regenerate) LLM-powered fixes for all gaps in a scan.
+    Requires at least one LLM API key to be configured.
+    """
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    try:
+        fixes = fix_generator_mod.generate(scan_id, force=force)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return JSONResponse({
+        "scan_id": scan_id,
+        "generated": len(fixes),
+        "fixes": fixes,
+    })
+
+
+@app.get("/api/scans/{scan_id}/fixes/{fix_id}")
+def get_fix(scan_id: int, fix_id: int):
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    fix = sqlite_db.get_fix(fix_id, scan_id)
+    if not fix:
+        raise HTTPException(status_code=404, detail="Fix not found")
+    return JSONResponse({"fix": fix})
+
+
+@app.post("/api/scans/{scan_id}/fixes/{fix_id}/apply")
+def apply_fix(scan_id: int, fix_id: int):
+    """Mark a fix as applied (content must be applied manually or via PR)."""
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    fix = sqlite_db.get_fix(fix_id, scan_id)
+    if not fix:
+        raise HTTPException(status_code=404, detail="Fix not found")
+    sqlite_db.update_fix_status(fix_id, "applied")
+    updated = sqlite_db.get_fix(fix_id, scan_id)
+    return JSONResponse({"status": "applied", "fix": updated})
+
+
+@app.post("/api/scans/{scan_id}/fixes/{fix_id}/dismiss")
+def dismiss_fix(scan_id: int, fix_id: int):
+    """Mark a fix as dismissed (won't show in pending list)."""
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    fix = sqlite_db.get_fix(fix_id, scan_id)
+    if not fix:
+        raise HTTPException(status_code=404, detail="Fix not found")
+    sqlite_db.update_fix_status(fix_id, "dismissed")
+    updated = sqlite_db.get_fix(fix_id, scan_id)
+    return JSONResponse({"status": "dismissed", "fix": updated})
+
+
+# --- Phase 7: AI Visibility Score & History ---
+
+@app.get("/api/scans/{scan_id}/score")
+def get_scan_score(scan_id: int, save: bool = True):
+    """Compute the AI visibility score for a scan."""
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    result = scoring_engine_mod.compute(scan_id, save=save)
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+    return JSONResponse(result)
+
+
+@app.get("/api/domains/{domain}/history")
+def get_domain_history(domain: str, limit: int = 50):
+    """Return score history trend for a domain (all scans, oldest first)."""
+    rows = sqlite_db.get_score_history(domain=domain, limit=limit)
+    return JSONResponse({"domain": domain, "history": rows})
+
+
+@app.get("/api/domains")
+def list_domains():
+    """List all domains that have score history."""
+    domains = sqlite_db.list_all_domains()
+    return JSONResponse({"domains": domains})
+
+
+# --- Phase 6: Competitor SOV ---
+
+class SovLinkRequest(BaseModel):
+    parent_scan_id: int
+    competitor_scan_id: int
+    competitor_url: str
+
+
+@app.post("/api/sov/link")
+def link_competitor(req: SovLinkRequest):
+    """Link a competitor scan to a target scan for SOV comparison."""
+    parent = sqlite_db.get_scan(req.parent_scan_id)
+    if not parent:
+        raise HTTPException(status_code=404, detail="Parent scan not found")
+    comp = sqlite_db.get_scan(req.competitor_scan_id)
+    if not comp:
+        raise HTTPException(status_code=404, detail="Competitor scan not found")
+    result = sov_mod.link_competitor(
+        req.parent_scan_id, req.competitor_scan_id, req.competitor_url
+    )
+    return JSONResponse(result)
+
+
+@app.get("/api/sov/{scan_id}")
+def get_sov(scan_id: int):
+    """Return share-of-voice comparison for target scan vs linked competitors."""
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    result = sov_mod.compare(scan_id)
+    return JSONResponse(result)
+
+
+@app.get("/api/sov/{scan_id}/competitors")
+def list_sov_competitors(scan_id: int):
+    """List competitor scans linked to this target scan."""
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    competitors = sov_mod.list_competitor_links(scan_id)
+    return JSONResponse({"scan_id": scan_id, "competitors": competitors})
+
+
+# --- CLI test endpoint (diagnostics) ---
+
+@app.get("/api/test/keys")
+def test_keys_endpoint():
+    """Diagnostics: which LLM provider keys are currently configured."""
+    from backend.app.llm import key_status
+    return JSONResponse(key_status())
+
 
 # Serving Next.js static build files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")

@@ -272,12 +272,11 @@ MOCK_ADAPTER = MockAdapter()
 
 
 def available_adapters() -> List:
-    """All adapters currently configured. Falls back to a mock adapter when
-    no real keys are present so the local pipeline can be exercised."""
-    real = [a for a in ADAPTERS if a.is_configured()]
-    if real:
-        return real
-    return [MOCK_ADAPTER]
+    """All real LLM adapters currently configured via environment keys.
+    Returns an empty list if no keys are set — callers must handle this
+    and refuse to run rather than silently producing fake results.
+    MockAdapter is NEVER returned here; use it explicitly in tests only."""
+    return [a for a in ADAPTERS if a.is_configured()]
 
 
 def key_status() -> dict:
