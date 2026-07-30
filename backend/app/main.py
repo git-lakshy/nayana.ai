@@ -22,6 +22,10 @@ from backend.app.agents import (
     run_agent_workflow,
     is_api_configured
 )
+from fastapi import Depends, Request
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+
 from backend.app import db as sqlite_db
 from backend.app import crawler as crawler_mod
 from backend.app import test_runner as test_runner_mod
@@ -30,6 +34,8 @@ from backend.app import gap_analyzer as gap_analyzer_mod
 from backend.app import fix_generator as fix_generator_mod
 from backend.app import sov as sov_mod
 from backend.app import scoring_engine as scoring_engine_mod
+from backend.app import auth, auth_db
+from backend.app.auth_routes import auth_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,6 +49,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------------------------------------------------------------------------
+# Startup: initialise SQLite schema (idempotent)
+# ---------------------------------------------------------------------------
+
+@app.on_event("startup")
+def on_startup():
+    sqlite_db.init_db()
+    auth_db.init_auth_db()
+    logger.info("DB initialised (core + auth tables)")
+
+
+# ---------------------------------------------------------------------------
+# Guest cookie middleware
+# Sets the nayana_guest cookie whenever get_optional_identity creates a new
+# guest session (it stashes the token in request.state.new_guest_token).
+# ---------------------------------------------------------------------------
+
+class GuestCookieMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        new_token = getattr(request.state, "new_guest_token", None)
+        if new_token:
+            response.set_cookie(
+                auth.GUEST_COOKIE,
+                new_token,
+                httponly=True,
+                samesite="lax",
+                max_age=auth.GUEST_TOKEN_EXPIRE_DAYS * 86400,
+            )
+        return response
+
+
+app.add_middleware(GuestCookieMiddleware)
+
+# Include auth + org routes
+app.include_router(auth_router)
 
 # Registry instance
 registry = AgentRegistry()
@@ -630,20 +673,47 @@ async def create_github_pr(req: FixRequest):
 # --- Phase 1 crawler endpoints ---
 
 @app.post("/api/crawl")
-def start_crawl(req: CrawlRequest):
-    """Kick off a synchronous crawl of `root_url`. Phase 1 runs in-process
-    with conservative caps (default 25 pages, depth 2, 200ms delay). Returns
-    the resulting scan row.
+def start_crawl(req: CrawlRequest,
+                identity: auth.Identity = Depends(auth.get_optional_identity)):
+    """Kick off a synchronous crawl of `root_url`.
+
+    Guest users get GUEST_SCAN_LIMIT free scans (default 5). Once exhausted,
+    a 402 is returned with a 'register' CTA. Authenticated users are scoped
+    to their org.
     """
-    logger.info("crawl request: %s (max_pages=%s, max_depth=%s)",
-                req.root_url, req.max_pages, req.max_depth)
+    # Gate: check guest scan limit BEFORE starting the crawl
+    auth.check_guest_scan_limit(identity)
+
+    logger.info("crawl request: %s (max_pages=%s, max_depth=%s) [%s]",
+                req.root_url, req.max_pages, req.max_depth, identity.kind)
     cfg = {
         "max_pages": req.max_pages,
         "max_depth": req.max_depth,
         "per_host_delay_ms": req.per_host_delay_ms,
     }
     scan = crawler_mod.run_crawl(req.root_url, cfg)
-    return JSONResponse(content={"status": scan.get("status", "unknown"), "scan": _serialize_scan(scan)})
+
+    # Tag scan with owner (user/org or guest session)
+    scan_id = scan.get("id")
+    if scan_id:
+        if identity.is_guest and identity.guest_session_id:
+            auth_db.tag_scan_owner(scan_id, guest_session_id=identity.guest_session_id)
+        elif identity.is_authenticated:
+            auth_db.tag_scan_owner(scan_id, user_id=identity.user_id, org_id=identity.org_id)
+
+    result = {"status": scan.get("status", "unknown"), "scan": _serialize_scan(scan)}
+
+    # Include quota info in response so frontend can update the counter
+    if identity.is_guest:
+        # Re-count after tagging so the number is accurate
+        used = auth_db.count_guest_scans_for_session(identity.guest_session_id) if identity.guest_session_id else 0
+        result["guest_quota"] = {
+            "scans_used": used,
+            "scan_limit": identity.guest_scan_limit,
+            "scans_remaining": max(0, identity.guest_scan_limit - used),
+        }
+
+    return JSONResponse(content=result)
 
 
 @app.get("/api/scans")
@@ -877,9 +947,10 @@ def list_fixes(scan_id: int, status: Optional[str] = None):
 
 
 @app.post("/api/scans/{scan_id}/fixes/generate")
-def generate_fixes(scan_id: int, force: bool = False):
+def generate_fixes(scan_id: int, force: bool = False,
+                   identity: auth.Identity = Depends(auth.require_feature("fix_generate"))):
     """Generate (or regenerate) LLM-powered fixes for all gaps in a scan.
-    Requires at least one LLM API key to be configured.
+    Requires a free account. Guests are prompted to register.
     """
     scan = sqlite_db.get_scan(scan_id)
     if not scan:
@@ -949,8 +1020,9 @@ def get_scan_score(scan_id: int, save: bool = True):
 
 
 @app.get("/api/domains/{domain}/history")
-def get_domain_history(domain: str, limit: int = 50):
-    """Return score history trend for a domain (all scans, oldest first)."""
+def get_domain_history(domain: str, limit: int = 50,
+                       identity: auth.Identity = Depends(auth.require_feature("history"))):
+    """Return score history trend for a domain. Requires a free account."""
     rows = sqlite_db.get_score_history(domain=domain, limit=limit)
     return JSONResponse({"domain": domain, "history": rows})
 
@@ -971,8 +1043,9 @@ class SovLinkRequest(BaseModel):
 
 
 @app.post("/api/sov/link")
-def link_competitor(req: SovLinkRequest):
-    """Link a competitor scan to a target scan for SOV comparison."""
+def link_competitor(req: SovLinkRequest,
+                    identity: auth.Identity = Depends(auth.require_feature("sov"))):
+    """Link a competitor scan to a target scan for SOV comparison. Requires pro plan."""
     parent = sqlite_db.get_scan(req.parent_scan_id)
     if not parent:
         raise HTTPException(status_code=404, detail="Parent scan not found")
