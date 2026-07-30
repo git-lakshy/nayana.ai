@@ -1,19 +1,10 @@
-"""Phase 3 LLM provider adapters.
+"""LLM provider adapters.
 
-Strict policy: each adapter refuses to instantiate without its API key in the
-environment. The caller (`test_runner`) preflights all five keys; once it gets
-past that, each adapter is safe to use.
+Each adapter checks for its API key and exposes:
+  name, model, is_configured() -> bool, complete(prompt, *, system=None) -> ProviderResult
 
-Each adapter exposes:
-    name      -- short id persisted into `answers.provider`
-    model     -- the upstream model id we actually called
-    is_configured() -> bool               -- key present?
-    complete(prompt, *, system=None) -> ProviderResult
-
-ProviderResult carries answer text, latency_ms, optional citations list, and
-an optional error string (None on success).  We never raise -- provider
-failures are persisted as `error` rows so a single flaky provider can't sink
-the whole test run.
+ProviderResult carries answer text, latency_ms, citations, and error.
+Adapters never raise — failures are stored as error rows.
 """
 from __future__ import annotations
 
@@ -253,18 +244,13 @@ ADAPTERS = [GeminiAdapter(), OpenAIAdapter(), ClaudeAdapter(),
 
 
 def available_adapters() -> List:
-    """All real LLM adapters currently configured via environment keys.
-    Returns an empty list if no keys are set — callers must handle this
-    and refuse to run rather than silently producing fake results.
-    MockAdapter is NEVER returned here; use it explicitly in tests only."""
+    """Return all configured API-key adapters. Empty list if no keys are set."""
     return [a for a in ADAPTERS if a.is_configured()]
 
 
 def available_adapters_all() -> List:
-    """Returns all usable adapters: API-key adapters first.
-    If no API keys are configured, falls back to browser-based adapters
-    (Puppeteer). Browser adapters never return mock data — they drive real
-    AI chat UIs. Returns empty list only if BOTH are unavailable."""
+    """Return all usable adapters: API-key adapters first, browser adapters as fallback.
+    Returns empty list if neither is available."""
     api = available_adapters()
     if api:
         return api

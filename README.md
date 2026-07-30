@@ -85,11 +85,13 @@ A terminal utility for running scans, checking system status, reviewing history,
 ## Tech stack
 
 - **Frontend:** Next.js, React, TypeScript, Tailwind CSS
-- **Backend:** FastAPI, Python
-- **Agents:** Google ADK, Gemini / Vertex AI-ready workflows
-- **Data flow:** Website crawling, heuristic evaluation, agent-based analysis
-- **Developer workflow:** CLI-driven scans and code remediation
-- **Deployment target:** Google Cloud Run
+- **Backend:** FastAPI, Python 3.11+
+- **LLM layer:** Dual-mode — API keys (Gemini, OpenAI, Claude, Perplexity, DeepSeek) or headless browser scraping via Puppeteer + Node.js (no keys required)
+- **Storage:** SQLite (WAL mode) → Postgres/Supabase (planned)
+- **Agents:** Google ADK, multi-LLM test orchestration, heuristic gap analysis
+- **Data flow:** BFS crawl → semantic chunking → gap detection → LLM fix generation → AEO scoring
+- **Developer workflow:** CLI-driven scans, fix generation, and LLM auth via admin routes
+- **Deployment target:** Google Cloud Run + GitHub Actions CI
 
 ---
 

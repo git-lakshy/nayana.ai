@@ -1,15 +1,11 @@
-"""Phase 4 heuristic gap analyzer.
+"""Heuristic AEO gap analyzer.
 
-Given a completed scan, inspect its pages and chunks and return a list of
-content gaps that hurt AI visibility:
-
-- thin_content     — pages with < 100 words
-- missing_meta     — pages with empty title or description
-- missing_schema   — pages with no JSON-LD / structured data
-- missing_page_type— scan lacks an expected page type (faq, pricing, docs, etc.)
-- buried_content   — chunks with very few words after heading-boundary split
-
-Output is JSON-serializable and consumed by GET /api/scans/{scan_id}/gaps.
+Inspects crawled pages and chunks and returns gaps that hurt AI visibility:
+  thin_content      — pages with < 100 words
+  missing_meta      — pages with no title or description
+  missing_schema    — pages with no JSON-LD structured data
+  missing_page_type — scan lacks expected coverage (faq, pricing, docs, etc.)
+  buried_content    — chunks with very few words under a heading
 """
 from __future__ import annotations
 

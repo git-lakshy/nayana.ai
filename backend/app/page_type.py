@@ -1,15 +1,9 @@
 """Heuristic page-type classifier.
 
-Pure function: input (url, soup, json_ld_types), output a label from the union
+Pure function: (url, soup, json_ld_types) → label from
 {landing, docs, faq, pricing, changelog, integration, blog, other}.
 
-Signal ordering (strongest -> weakest):
-    1. JSON-LD @type (e.g. FAQPage, Product+Offer, TechArticle, BlogPosting)
-    2. URL path keywords (docs/, pricing/, blog/, etc.)
-    3. Heading copy ($%, "Frequently asked", etc.)
-
-This is intentionally simple. Phase 2 will replace it with an LLM-based classifier;
-Phase 1 keeps the dependency surface flat (no LLM required to demo the crawler).
+Signal priority: JSON-LD @type → URL path keywords → heading copy.
 """
 from __future__ import annotations
 

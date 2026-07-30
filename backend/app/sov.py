@@ -1,21 +1,8 @@
-"""Phase 6 — Competitor Share-of-Voice (SOV).
+"""Competitor Share-of-Voice (SOV) comparison.
 
-Compares AI-test results between a target scan and one or more competitor
-scans. Produces per-provider metrics:
-
-  brand_mention_rate     : fraction of answers mentioning the brand/domain
-  domain_citation_rate   : fraction of answers citing the domain URL
-  avg_confidence         : average confidence score (0-1)
-  avg_attribution        : average attribution score (0-1)
-  competitor_mention_rate: fraction of answers mentioning a competitor
-  refusal_rate           : fraction of refused answers
-
-Share-of-voice (sov) per provider = target_brand_mention_rate /
-    (target_brand_mention_rate + sum(competitor brand mention rates))
-
-Endpoints:
-  POST /api/sov/link          link a competitor scan to a target scan
-  GET  /api/sov/{scan_id}     compare target vs all linked competitor scans
+Aggregates LLM test scores across linked competitor scans and computes
+share-of-voice per provider: target_brand_mention_rate /
+(target + sum of competitor brand mention rates).
 """
 from __future__ import annotations
 
@@ -24,10 +11,6 @@ from typing import Optional
 
 from backend.app import db as sqlite_db
 
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 def _aggregate_scores(scan_id: int) -> dict[str, dict]:
     """Return per-provider aggregated metrics for a scan."""
@@ -75,10 +58,6 @@ def _compute_sov(target_rate: float, competitor_rates: list[float]) -> float:
         return 0.0
     return round(target_rate / total, 4)
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def link_competitor(parent_scan_id: int, competitor_scan_id: int,
                     competitor_url: str) -> dict:

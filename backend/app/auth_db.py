@@ -1,4 +1,4 @@
-"""Auth DB layer for nayana.ai P9 - tables, migrations, repo functions."""
+"""Auth DB layer — schema, migrations, and repository functions."""
 from __future__ import annotations
 from typing import Optional
 from backend.app.db import get_conn, transaction, now_iso

@@ -1,16 +1,8 @@
-"""Per-page fetch + structured extraction.
+"""Per-page fetch and structured extraction.
 
-Responsibilities:
-- HTTP fetch (with size cap and HTML-only filter)
-- Same-origin outlink discovery (for the BFS frontier in crawler.py)
-- JSON-LD extraction and @type extraction
-- Title / meta description / word count
-- Page-type classification
-- Body chunking via chunker.chunk_soup
-
-This module does not write to the DB. The crawler orchestrates fetch + parse
-and decides how to persist (so the same extractor can also serve a future
-on-demand re-parse endpoint).
+Handles HTTP fetch (with size cap and HTML-only filter), same-origin outlink
+discovery, JSON-LD extraction, title/description/word count, page-type
+classification, and body chunking. Does not write to the DB.
 """
 from __future__ import annotations
 

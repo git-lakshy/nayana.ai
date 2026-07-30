@@ -1,13 +1,8 @@
-﻿"""Phase 3 test orchestration: question generation + multi-LLM evaluation.
+"""Multi-LLM test orchestration: question generation and answer scoring.
 
-Flow:
-1. For a given scan, fetch all chunks (grounding context).
-2. Use an LLM to generate 3-5 questions per chunk (deduped across chunks).
-3. Run each question through every configured LLM adapter.
-4. Score every answer with scorer.full_score.
-5. Persist everything through db.py repos.
-
-Strict-preflight: if no adapter key is configured the request is refused.
+For each scan: generates questions from crawled chunks via LLM, fans out
+to all configured providers, scores every answer, and persists results.
+Refuses to run if no LLM adapter is configured.
 """
 from __future__ import annotations
 

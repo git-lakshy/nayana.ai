@@ -5,8 +5,8 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 class ProviderInfo(BaseModel):
-    organization: str = "A-EYE Enterprise Swarm"
-    url: str = "https://github.com/Nasiko-Labs/nasiko"
+    organization: str = "nayana.ai"
+    url: str = "https://nayana.ai"
 
 class Capabilities(BaseModel):
     streaming: bool = True
@@ -36,7 +36,6 @@ class AgentRegistry:
         self._pre_register_agents()
 
     def _pre_register_agents(self):
-        # Pre-populate registry with default AEO Swarm agents
         self.register_agent(
             "IngestionAgent",
             AgentCard(

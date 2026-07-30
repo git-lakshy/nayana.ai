@@ -1,13 +1,7 @@
-"""P9 Auth module for nayana.ai.
+"""Authentication and identity for nayana.ai.
 
-Covers:
-  - Password hashing (bcrypt)
-  - JWT access tokens (short-lived, 15 min)
-  - Opaque refresh tokens (30 days, stored as sha256 hash)
-  - Guest sessions (anonymous, 5 free scans, stored in DB)
-  - API keys (nai_<32chars>, stored as sha256 hash)
-  - Feature gating per plan / identity type
-  - FastAPI dependency helpers: get_optional_identity, require_user, require_feature
+Covers password hashing, JWT access tokens, opaque refresh tokens,
+guest sessions, API keys, feature gating, and FastAPI dependency helpers.
 """
 from __future__ import annotations
 

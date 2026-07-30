@@ -1,20 +1,7 @@
-"""P9 Auth routes for nayana.ai.
+"""Auth and org routes for nayana.ai.
 
-Mount with: app.include_router(auth_router)
-
-Routes:
-  POST /api/auth/register
-  POST /api/auth/login
-  POST /api/auth/refresh
-  POST /api/auth/logout
-  GET  /api/auth/me
-  GET  /api/auth/verify/{token}
-  GET  /api/orgs/{slug}
-  GET  /api/orgs/{slug}/scans
-  GET  /api/orgs/{slug}/members
-  POST /api/orgs/{slug}/api-keys
-  DELETE /api/orgs/{slug}/api-keys/{key_id}
-  GET  /api/guest/status   (guest scan quota status)
+Mounts register, login, refresh, logout, me, email-verify,
+org management, API key management, and guest quota status.
 """
 from __future__ import annotations
 

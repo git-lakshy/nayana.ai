@@ -1,18 +1,7 @@
-"""BFS web crawler — Phase 1 implementation.
+"""BFS web crawler.
 
-Scope:
-    - Same-origin crawl from a single root URL
-    - Depth-limited BFS (default 2, configurable)
-    - Per-host politeness delay
-    - URL normalization + dedupe at the (scan_id, url_normalized) DB level
-    - Persistent scan record visible via /api/scans
-
-Out of scope (recorded for later phases):
-    - robots.txt parsing — Phase 2, when politeness rules formalize
-    - sitemap.xml ingestion — Phase 2, useful for coverage on docs-heavy sites
-    - BackgroundTasks/queue — Phase 5+ with a real worker; for now Phase 1 runs
-      the crawl synchronously inside the POST request with conservative caps
-      (default 25 pages, 2 levels deep) to stay under ~30s.
+Same-origin crawl from a root URL: depth-limited BFS, per-host politeness delay,
+URL normalization and dedupe. Runs synchronously (default: 25 pages, depth 2).
 """
 from __future__ import annotations
 

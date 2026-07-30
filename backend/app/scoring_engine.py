@@ -1,20 +1,10 @@
-"""Phase 7 — AI Visibility Scoring Engine.
+"""AI Visibility Scoring Engine.
 
-Computes a single composite AI Visibility Score (0-100) for a scan from:
-
-  1. Gap penalty   (gaps reduce the base score)
-  2. LLM signal    (confidence + attribution boost if test data exists)
-
-Score breakdown:
-  base_score = 100
-  - 15 pts for each HIGH severity gap    (max -45)
-  - 8  pts for each MEDIUM severity gap  (max -40)
-  - 2  pts for each LOW severity gap     (max -15)
-  + up to 15 bonus pts from LLM confidence (avg_confidence * 15)
-  + up to 10 bonus pts from attribution    (avg_attribution * 10)
-  Clamped to [0, 100].
-
-The score and breakdown are stored in score_history for trend tracking.
+Composite score (0-100) from gap penalties and LLM signal bonus:
+  base = 100
+  - 15 per HIGH gap (max -45), - 8 per MEDIUM (max -40), - 2 per LOW (max -15)
+  + avg_confidence * 15 + avg_attribution * 10
+  Clamped to [0, 100]. Stored in score_history for trend tracking.
 """
 from __future__ import annotations
 
@@ -26,9 +16,6 @@ from backend.app import db as sqlite_db
 from backend.app import gap_analyzer
 
 
-# ---------------------------------------------------------------------------
-# Penalty table
-# ---------------------------------------------------------------------------
 PENALTY = {"high": 15, "medium": 8, "low": 2}
 MAX_PENALTY = {"high": 45, "medium": 40, "low": 15}
 
@@ -53,10 +40,6 @@ def _llm_signal(scan_id: int) -> tuple[Optional[float], Optional[float], Optiona
     avg_acc  = sum(acc_vals)  / len(acc_vals)  if acc_vals  else None
     return avg_conf, avg_attr, avg_acc
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def compute(scan_id: int, save: bool = True) -> dict:
     """Compute and (optionally) persist the AI visibility score for a scan."""

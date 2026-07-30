@@ -1,10 +1,7 @@
-"""Embeddings + cosine similarity for accuracy scoring.
+"""Embeddings and cosine similarity for answer accuracy scoring.
 
-Single shared embedder: OpenAI `text-embedding-3-small`. Phase 3 ships with
-this provider only because the OpenAI key is already required by the strict
-LTM-tester policy (if it's missing the test fails anyway). Falls through to
-`None` on any error so scoring can still complete (accuracy column -> NULL)
-without crashing the run.
+Uses OpenAI text-embedding-3-small. Returns None on any failure so scoring
+can complete without crashing (accuracy column becomes NULL).
 """
 from __future__ import annotations
 

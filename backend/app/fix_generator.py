@@ -1,18 +1,8 @@
-"""Phase 5 — LLM-powered Fix Generator.
+"""LLM-powered fix generator.
 
-For each gap found by gap_analyzer, reads the ACTUAL crawled page content
-from the DB and calls a real LLM to generate domain-specific, ready-to-use
-fix content. No placeholders. No generic templates.
-
-Flow:
-  1. Fetch the real page text (from chunks) for the gap's page.
-  2. Build a gap-type-specific prompt that includes the real content.
-  3. Call the first available LLM adapter.
-  4. Parse and store the result.
-  5. Persist to the `fixes` table.
-
-If no LLM is configured, raises RuntimeError — there is no fallback.
-This is intentional: fixes must be grounded in real domain analysis.
+For each gap found by gap_analyzer, fetches actual crawled content from the DB
+and calls a real LLM to generate domain-specific, ready-to-apply fixes.
+Raises RuntimeError if no LLM is configured — no generic fallbacks.
 """
 from __future__ import annotations
 
@@ -26,10 +16,6 @@ from backend.app import llm as llm_mod
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Context helpers — pull real crawled content from DB
-# ---------------------------------------------------------------------------
 
 def _domain_from_url(url: str) -> str:
     try:
@@ -85,10 +71,6 @@ def _scan_context_summary(scan_id: int) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# LLM call
-# ---------------------------------------------------------------------------
-
 _FIX_SYSTEM = (
     "You are an AEO (Answer Engine Optimization) expert. "
     "You write developer-ready HTML and JSON-LD fixes that make websites "
@@ -119,10 +101,6 @@ def _call_llm(prompt: str) -> Optional[str]:
     text = result.answer_text.strip()
     return text if text else None
 
-
-# ---------------------------------------------------------------------------
-# Per-gap-type prompt builders — all use real content
-# ---------------------------------------------------------------------------
 
 def _build_thin_content_fix(gap: dict, scan_id: int, root_url: str) -> Optional[dict]:
     url = gap.get("url") or ""

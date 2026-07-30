@@ -1,13 +1,12 @@
-﻿"""Phase 3 scoring: extracts confidence, hedge_rate, attribution, and
-semantic-accuracy signals from a provider answer.
+"""Signal extraction from LLM answers.
 
-All functions are pure (no I/O) so they can be called in a tight loop
-across many questions * providers.
+Pure functions (no I/O): confidence, hedge_rate, attribution, and
+semantic-accuracy signals. Safe to call in a tight loop across providers.
 """
 from __future__ import annotations
 
 import re
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple
 
 # ----- refusal patterns -----
 _REFUSAL = re.compile(
