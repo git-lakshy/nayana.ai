@@ -1,0 +1,13 @@
+{
+  "name": "nayana-browser-llm",
+  "version": "1.0.0",
+  "description": "Headless browser LLM scraper — visits real AI chat UIs and extracts answers",
+  "main": "scraper.js",
+  "type": "commonjs",
+  "scripts": {
+    "install-browsers": "npx puppeteer browsers install chrome"
+  },
+  "dependencies": {
+    "puppeteer": "^25.4.0"
+  }
+}

@@ -49,46 +49,71 @@ class TestArtifacts:
 
 
 async def _gen_qs_for_chunk(chunk_text: str) -> list[str]:
-    """Generate questions from a single chunk using Gemini ADK."""
-    if not is_api_configured():
-        return []
+    """
+    Generate questions from a single chunk.
+    Primary: Gemini ADK (when GOOGLE_API_KEY / GEMINI_API_KEY is set).
+    Fallback: any available adapter (API-key or browser) via direct complete().
+    """
+    prompt = f"Chunk content:\n\n{chunk_text[:1500]}"
 
+    # --- primary: Gemini ADK ---
+    if is_api_configured():
+        try:
+            from google.adk import Agent, Runner
+            from google.adk.sessions import InMemorySessionService
+            from google.genai import types
+
+            agent = Agent(
+                name="QuestionGen",
+                model="gemini-2.5-flash",
+                instruction=_QUESTION_SYSTEM,
+            )
+            sess = InMemorySessionService()
+            runner = Runner(agent=agent, session_service=sess,
+                            app_name="nayana-p3", auto_create_session=True)
+
+            events = runner.run(
+                user_id="gen",
+                session_id="gen-sess",
+                new_message=types.Content(role="user",
+                                          parts=[types.Part(text=prompt)]),
+            )
+
+            text_parts = []
+            for ev in events:
+                if ev.error_message:
+                    logger.warning("question-gen error: %s", ev.error_message)
+                    break
+                if ev.message and ev.message.parts:
+                    text_parts.extend([p.text for p in ev.message.parts if p.text])
+                elif ev.content and hasattr(ev.content, "parts"):
+                    text_parts.extend([p.text for p in ev.content.parts if p.text])
+
+            qs = [l.strip() for l in "\n".join(text_parts).splitlines() if l.strip()][:5]
+            if qs:
+                return qs
+        except Exception:
+            logger.exception("question-gen: Gemini ADK failed, trying adapter fallback")
+
+    # --- fallback: any available adapter (API key or browser) ---
     try:
-        from google.adk import Agent, Runner
-        from google.adk.sessions import InMemorySessionService
-        from google.genai import types
-
-        agent = Agent(
-            name="QuestionGen",
-            model="gemini-2.5-flash",
-            instruction=_QUESTION_SYSTEM,
-        )
-        sess = InMemorySessionService()
-        runner = Runner(agent=agent, session_service=sess,
-                        app_name="nayana-p3", auto_create_session=True)
-
-        prompt = f"Chunk content:\n\n{chunk_text[:1500]}"
-        events = runner.run(
-            user_id="gen",
-            session_id="gen-sess",
-            new_message=types.Content(role="user",
-                                      parts=[types.Part(text=prompt)]),
-        )
-
-        text_parts = []
-        for ev in events:
-            if ev.error_message:
-                logger.warning("question-gen error: %s", ev.error_message)
-                break
-            if ev.message and ev.message.parts:
-                text_parts.extend([p.text for p in ev.message.parts if p.text])
-            elif ev.content and hasattr(ev.content, "parts"):
-                text_parts.extend([p.text for p in ev.content.parts if p.text])
-
-        return [l.strip() for l in "\n".join(text_parts).splitlines() if l.strip()][:5]
+        adapters = llm.available_adapters_all()
+        if adapters:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                _thread_pool,
+                lambda: adapters[0].complete(prompt, system=_QUESTION_SYSTEM),
+            )
+            if result.answer_text:
+                return [
+                    l.strip()
+                    for l in result.answer_text.splitlines()
+                    if l.strip() and len(l.strip()) > 8
+                ][:5]
     except Exception:
-        logger.exception("question-gen failed")
-        return []
+        logger.exception("question-gen: adapter fallback also failed")
+
+    return []
 
 
 async def generate_questions(scan_id: int,
@@ -125,8 +150,10 @@ async def generate_questions(scan_id: int,
 
     if not qset:
         raise ValueError(
-            f"Scan {scan_id}: Gemini ADK question generation returned no results. "
-            "Check GEMINI_API_KEY / GOOGLE_API_KEY is set and the ADK is installed."
+            f"Scan {scan_id}: Question generation returned no results. "
+            "Ensure at least one LLM is available: set an API key "
+            "(GEMINI_API_KEY, OPENAI_API_KEY, etc.) or install browser adapters "
+            "(cd backend/browser && npm install && npm run install-browsers)."
         )
 
     return list(qset.keys())[:max_total]
@@ -146,12 +173,15 @@ async def run_test(scan_id: int, *,
                    competitors: list[str] | None = None,
                    ) -> TestArtifacts:
     """Full multi-LLM testing pipeline for one scan."""
-    adapters = llm.available_adapters()
+    adapters = llm.available_adapters_all()
     if not adapters:
         raise ValueError(
-            "No LLM provider keys configured. Set at least one of: "
-            "GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, "
-            "PERPLEXITY_API_KEY, DEEPSEEK_API_KEY"
+            "No LLM configured. Options:\n"
+            "  1. Set an API key: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, "
+            "PERPLEXITY_API_KEY, or DEEPSEEK_API_KEY\n"
+            "  2. Use browser adapters: install Puppeteer (cd backend/browser && npm install && "
+            "npm run install-browsers) then optionally authenticate providers via "
+            "POST /api/admin/llm-auth/start/{provider}"
         )
 
     art = TestArtifacts(

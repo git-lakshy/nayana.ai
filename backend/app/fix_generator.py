@@ -100,13 +100,15 @@ _FIX_SYSTEM = (
 
 
 def _call_llm(prompt: str) -> Optional[str]:
-    """Call first available real LLM adapter. Returns None on failure."""
-    adapters = llm_mod.available_adapters()
+    """Call first available real LLM adapter (API key or browser). Returns None on failure."""
+    adapters = llm_mod.available_adapters_all()
     if not adapters:
         raise RuntimeError(
-            "No LLM provider keys configured. "
-            "Set GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, "
-            "PERPLEXITY_API_KEY, or DEEPSEEK_API_KEY to generate real fixes."
+            "No LLM configured. Options:\n"
+            "  1. Set an API key env var: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, "
+            "PERPLEXITY_API_KEY, or DEEPSEEK_API_KEY\n"
+            "  2. Install browser adapters: cd backend/browser && npm install && "
+            "npm run install-browsers (then optionally authenticate via admin routes)"
         )
     adapter = adapters[0]
     logger.info("fix_generator: calling %s", adapter.name)
@@ -405,12 +407,14 @@ def generate(scan_id: int, force: bool = False) -> list[dict]:
             return existing
 
     # Preflight: ensure LLM is available before doing any work
-    adapters = llm_mod.available_adapters()
+    adapters = llm_mod.available_adapters_all()
     if not adapters:
         raise RuntimeError(
-            "No LLM API keys configured. Fix generation requires a real LLM. "
-            "Set GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, "
-            "PERPLEXITY_API_KEY, or DEEPSEEK_API_KEY."
+            "No LLM configured. Fix generation requires a real LLM. Options:\n"
+            "  1. Set an API key: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, "
+            "PERPLEXITY_API_KEY, or DEEPSEEK_API_KEY\n"
+            "  2. Install Puppeteer browser adapters: cd backend/browser && npm install && "
+            "npm run install-browsers"
         )
 
     gaps = gap_analyzer.analyze(scan_id)

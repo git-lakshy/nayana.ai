@@ -1009,9 +1009,125 @@ def list_sov_competitors(scan_id: int):
 
 @app.get("/api/test/keys")
 def test_keys_endpoint():
-    """Diagnostics: which LLM provider keys are currently configured."""
+    """Diagnostics: which LLM provider keys and browser adapters are configured."""
     from backend.app.llm import key_status
     return JSONResponse(key_status())
+
+
+# ---------------------------------------------------------------------------
+# Admin: Browser LLM auth management
+# ---------------------------------------------------------------------------
+# These routes let you authenticate browser-based LLM providers (Claude, Gemini,
+# Grok) by opening a real visible browser window. ChatGPT and Perplexity work
+# without authentication. All sessions are stored as cookies in backend/browser/sessions/
+# ---------------------------------------------------------------------------
+
+@app.get("/api/admin/llm-auth/status")
+def llm_auth_status():
+    """
+    Returns authentication status for all browser LLM providers.
+    Also shows whether Puppeteer is installed and ready.
+    """
+    try:
+        from backend.app.browser_adapter import all_session_status, is_browser_ready, _puppeteer_installed
+        return JSONResponse({
+            "puppeteer_installed": _puppeteer_installed(),
+            "browser_ready": is_browser_ready(),
+            "providers": all_session_status(),
+            "note": {
+                "chatgpt": "Works without auth (unauthenticated). Auth optional for higher limits.",
+                "perplexity": "Works without auth. Auth optional.",
+                "claude": "Requires auth via POST /api/admin/llm-auth/start/claude",
+                "gemini": "Requires auth via POST /api/admin/llm-auth/start/gemini",
+                "grok": "Requires auth via POST /api/admin/llm-auth/start/grok",
+            }
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e), "puppeteer_installed": False}, status_code=500)
+
+
+@app.post("/api/admin/llm-auth/start/{provider}")
+def llm_auth_start(provider: str, timeout: int = 300):
+    """
+    Opens a VISIBLE browser window so you can log in to the specified provider.
+    Blocks until login is detected (up to `timeout` seconds) then saves the session.
+
+    Providers: chatgpt, perplexity, claude, gemini, grok
+    Example: POST /api/admin/llm-auth/start/claude?timeout=300
+
+    WARNING: This opens a real browser on the server machine. Only use on local dev.
+    """
+    valid_providers = {"chatgpt", "perplexity", "claude", "gemini", "grok"}
+    if provider not in valid_providers:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown provider '{provider}'. Valid: {', '.join(sorted(valid_providers))}"
+        )
+    try:
+        from backend.app.browser_adapter import start_auth
+        result = start_auth(provider, timeout_s=timeout)
+        if result.get("ok"):
+            return JSONResponse({
+                "ok": True,
+                "provider": provider,
+                "savedAt": result.get("savedAt"),
+                "message": f"Session saved for {provider}. You can now run tests and generate fixes.",
+            })
+        else:
+            raise HTTPException(status_code=400, detail=result.get("error", "Auth failed"))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/admin/llm-auth/{provider}")
+def llm_auth_clear(provider: str):
+    """
+    Clears the saved session for a provider, effectively logging out.
+    The next test run will use other available providers.
+    """
+    try:
+        from backend.app.browser_adapter import clear_auth
+        result = clear_auth(provider)
+        return JSONResponse(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/llm-auth/test/{provider}")
+def llm_auth_test(provider: str, question: str = "What is 2 + 2? Answer in one sentence."):
+    """
+    Quick smoke-test: ask a simple question through the specified browser provider
+    and return the answer. Useful for verifying a session works before a full test run.
+    """
+    valid_providers = {"chatgpt", "perplexity", "claude", "gemini", "grok"}
+    if provider not in valid_providers:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown provider '{provider}'. Valid: {', '.join(sorted(valid_providers))}"
+        )
+    try:
+        from backend.app.browser_adapter import BrowserAdapter, is_browser_ready
+        if not is_browser_ready():
+            raise HTTPException(
+                status_code=409,
+                detail="Puppeteer not installed. Run: cd backend/browser && npm install && npm run install-browsers"
+            )
+        adapter = BrowserAdapter(provider, timeout_s=60)
+        result = adapter.complete(question)
+        return JSONResponse({
+            "provider": provider,
+            "question": question,
+            "answer": result.answer_text,
+            "latency_ms": result.latency_ms,
+            "error": result.error,
+            "ok": result.ok,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Serving Next.js static build files

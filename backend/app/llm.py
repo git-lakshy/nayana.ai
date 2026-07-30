@@ -279,13 +279,39 @@ def available_adapters() -> List:
     return [a for a in ADAPTERS if a.is_configured()]
 
 
+def available_adapters_all() -> List:
+    """Returns all usable adapters: API-key adapters first.
+    If no API keys are configured, falls back to browser-based adapters
+    (Puppeteer). Browser adapters never return mock data — they drive real
+    AI chat UIs. Returns empty list only if BOTH are unavailable."""
+    api = available_adapters()
+    if api:
+        return api
+    try:
+        from backend.app.browser_adapter import available_browser_adapters
+        browser = available_browser_adapters()
+        if browser:
+            return browser
+    except Exception:
+        pass
+    return []
+
+
 def key_status() -> dict:
-    """Publisher map: env_var -> bool, for diagnostics."""
+    """Publisher map: env_var -> bool, and browser adapter status."""
+    try:
+        from backend.app.browser_adapter import all_session_status, is_browser_ready
+        browser_ready = is_browser_ready()
+        browser_sessions = all_session_status()
+    except Exception:
+        browser_ready = False
+        browser_sessions = {}
     return {
-        "GEMINI_API_KEY":    bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")),
-        "OPENAI_API_KEY":    bool(os.environ.get("OPENAI_API_KEY")),
-        "ANTHROPIC_API_KEY": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "GEMINI_API_KEY":     bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")),
+        "OPENAI_API_KEY":     bool(os.environ.get("OPENAI_API_KEY")),
+        "ANTHROPIC_API_KEY":  bool(os.environ.get("ANTHROPIC_API_KEY")),
         "PERPLEXITY_API_KEY": bool(os.environ.get("PERPLEXITY_API_KEY")),
-        "DEEPSEEK_API_KEY":  bool(os.environ.get("DEEPSEEK_API_KEY")),
-        "MOCK_LLM_FALLBACK": True,
+        "DEEPSEEK_API_KEY":   bool(os.environ.get("DEEPSEEK_API_KEY")),
+        "browser_puppeteer_ready": browser_ready,
+        "browser_sessions": browser_sessions,
     }
