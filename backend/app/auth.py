@@ -34,7 +34,17 @@ from backend.app import auth_db
 # Config (override via environment)
 # ---------------------------------------------------------------------------
 
-JWT_SECRET = os.getenv("JWT_SECRET", "nayana-dev-secret-CHANGE-IN-PROD")
+import logging
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_JWT_SECRET = "nayana-dev-secret-CHANGE-IN-PROD"
+JWT_SECRET = os.getenv("JWT_SECRET", _DEFAULT_JWT_SECRET)
+if JWT_SECRET == _DEFAULT_JWT_SECRET:
+    logger.warning(
+        "JWT_SECRET is the built-in dev default — set the JWT_SECRET "
+        "environment variable before deploying to production."
+    )
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
@@ -42,6 +52,8 @@ GUEST_TOKEN_EXPIRE_DAYS = int(os.getenv("GUEST_TOKEN_EXPIRE_DAYS", "30"))
 GUEST_SCAN_LIMIT = int(os.getenv("GUEST_SCAN_LIMIT", "5"))
 GUEST_COOKIE = "nayana_guest"
 API_KEY_PREFIX = "nai_"
+# Set COOKIE_SECURE=1 in production (HTTPS) so auth cookies are marked Secure.
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "0").strip() == "1"
 
 # ---------------------------------------------------------------------------
 # Feature sets — what each plan/tier can do

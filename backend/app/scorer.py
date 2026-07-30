@@ -110,7 +110,7 @@ def full_score(answer_text: str, ground_truth: str, *,
                competitors: list[str] | None = None,
                embed_tuple: Tuple | None = None,
                ) -> dict:
-    """Run every Phase 3 signal and return a dict ready for persist_scores."""
+    """Run all scoring signals and return a dict ready for persist_scores."""
     txt = (answer_text or "").strip()
     if not txt:
         return {

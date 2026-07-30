@@ -32,7 +32,8 @@ class LoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    # Optional: the refresh endpoint also accepts the 'nayana_refresh' cookie.
+    refresh_token: Optional[str] = None
 
 
 class CreateApiKeyRequest(BaseModel):
@@ -45,13 +46,13 @@ class CreateApiKeyRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 _COOKIE = auth.GUEST_COOKIE
-_COOKIE_OPTS = dict(httponly=True, samesite="lax", max_age=auth.GUEST_TOKEN_EXPIRE_DAYS * 86400)
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         "nayana_refresh", token,
         httponly=True, samesite="lax",
+        secure=auth.COOKIE_SECURE,
         max_age=auth.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
 
@@ -118,10 +119,10 @@ def register(req: RegisterRequest, request: Request, response: Response):
     ip, ua = _get_ip_ua(request)
     tokens = _token_pair(uid, org["id"], "owner", org["plan"], ip, ua)
 
-    # Clear guest cookie now that they're registered
-    response.delete_cookie(_COOKIE)
-
-    return JSONResponse(
+    # NOTE: cookies must be set on the Response object that is actually
+    # returned — mutations to the injected `response` param are dropped by
+    # FastAPI when a Response instance is returned directly.
+    resp = JSONResponse(
         status_code=201,
         content={
             "user": {"id": uid, "email": email, "name": user["name"]},
@@ -129,10 +130,14 @@ def register(req: RegisterRequest, request: Request, response: Response):
             **tokens,
         },
     )
+    # Clear guest cookie now that they're registered, and set the refresh cookie.
+    resp.delete_cookie(_COOKIE)
+    _set_refresh_cookie(resp, tokens["refresh_token"])
+    return resp
 
 
 @auth_router.post("/api/auth/login")
-def login(req: LoginRequest, request: Request, response: Response):
+def login(req: LoginRequest, request: Request):
     """Email + password login. Returns JWT access + refresh tokens."""
     email = auth.validate_email(req.email)
     user = auth_db.get_user_by_email(email)
@@ -148,17 +153,21 @@ def login(req: LoginRequest, request: Request, response: Response):
 
     ip, ua = _get_ip_ua(request)
     tokens = _token_pair(user["id"], org["id"], org["role"], org["plan"], ip, ua)
-    _set_refresh_cookie(response, tokens["refresh_token"])
 
-    return JSONResponse({
+    # Cookies must be set on the Response instance that is actually returned;
+    # mutations to an injected `response` param are dropped when a Response
+    # object is returned directly.
+    resp = JSONResponse({
         "user": {"id": user["id"], "email": user["email"], "name": user["name"]},
         "org": {"id": org["id"], "slug": org["slug"], "plan": org["plan"]},
         **tokens,
     })
+    _set_refresh_cookie(resp, tokens["refresh_token"])
+    return resp
 
 
 @auth_router.post("/api/auth/refresh")
-def refresh_token(req: RefreshRequest, request: Request, response: Response):
+def refresh_token(req: RefreshRequest, request: Request):
     """
     Rotate a refresh token. Old token is invalidated; new pair is issued.
     Accepts token in body or 'nayana_refresh' cookie.
@@ -171,21 +180,20 @@ def refresh_token(req: RefreshRequest, request: Request, response: Response):
         )
     ip, ua = _get_ip_ua(request)
     new_access, new_refresh = auth.rotate_refresh_token(token, ip, ua)
-    _set_refresh_cookie(response, new_refresh)
-    return JSONResponse({"access_token": new_access, "refresh_token": new_refresh, "token_type": "Bearer"})
+    resp = JSONResponse({"access_token": new_access, "refresh_token": new_refresh, "token_type": "Bearer"})
+    _set_refresh_cookie(resp, new_refresh)
+    return resp
 
 
 @auth_router.post("/api/auth/logout")
-def logout(request: Request, response: Response):
-    """Invalidate the current refresh token (body or cookie)."""
+def logout(request: Request):
+    """Invalidate the current refresh token (cookie-based)."""
     token = request.cookies.get("nayana_refresh")
-    if not token:
-        # Try body
-        pass
     if token:
         auth.invalidate_refresh_token(token)
-    _clear_refresh_cookie(response)
-    return JSONResponse({"ok": True})
+    resp = JSONResponse({"ok": True})
+    _clear_refresh_cookie(resp)
+    return resp
 
 
 @auth_router.get("/api/auth/me")

@@ -9,6 +9,7 @@ import logging
 import time
 from collections import deque
 from typing import Optional
+from urllib.parse import urlsplit
 
 from backend.app import db, page_extract
 
@@ -51,6 +52,7 @@ def _crawl_loop(scan_id: int, root_norm: str, cfg: dict) -> None:
     seen_norm: set[str] = set()
     frontier.append((root_norm, 0))
     seen_norm.add(root_norm)
+    root_host = urlsplit(root_norm).netloc.lower()
 
     per_host_delay = cfg["per_host_delay_ms"] / 1000.0
     pages_found = 0
@@ -71,9 +73,15 @@ def _crawl_loop(scan_id: int, root_norm: str, cfg: dict) -> None:
         if fetched is None:
             continue
         html, final_url = fetched
-        # If a redirect landed us elsewhere, dedupe by final_url next time.
+        # If a redirect landed us elsewhere, dedupe by final_url and keep the
+        # crawl pinned to the root origin (a redirect must not drag the crawl
+        # onto another site).
         if final_url and final_url != url:
             final_norm = db.normalize_url(final_url)
+            if urlsplit(final_norm).netloc.lower() != root_host:
+                logger.info("[scan %d] skipping off-origin redirect %s -> %s",
+                            scan_id, url, final_norm)
+                continue
             if final_norm in visited:
                 continue
             url = final_norm

@@ -7,8 +7,11 @@ classification, and body chunking. Does not write to the DB.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
+import os
+import socket
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
@@ -32,8 +35,48 @@ def _ws(s: Optional[str]) -> str:
 
 # ----- fetch -----
 
+def _allow_private_hosts() -> bool:
+    """Private/loopback hosts are allowed in dev (fixture servers) but must be
+    blocked in production. Set NAYANA_ENV=prod to enforce the SSRF guard, or
+    NAYANA_ALLOW_PRIVATE_HOSTS=1 to explicitly allow private hosts anywhere."""
+    if os.getenv("NAYANA_ALLOW_PRIVATE_HOSTS", "").strip() == "1":
+        return True
+    return os.getenv("NAYANA_ENV", "dev").strip().lower() != "prod"
+
+
+def is_public_url(url: str) -> bool:
+    """SSRF guard: accept only absolute http(s) URLs whose host resolves to
+    globally routable IPs (no loopback/private/link-local/metadata ranges)."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    if _allow_private_hosts():
+        return True
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        infos = socket.getaddrinfo(parsed.hostname, port, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError, ValueError, OverflowError):
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if not ip.is_global:
+            return False
+    return True
+
+
 def fetch(url: str) -> Optional[Tuple[str, str]]:
     """Fetch a URL. Returns (html, final_url) on success, None otherwise."""
+    if not is_public_url(url):
+        logger.info("blocked non-public or invalid URL: %s", url)
+        return None
     try:
         with httpx.Client(
             follow_redirects=True,
@@ -46,13 +89,17 @@ def fetch(url: str) -> Optional[Tuple[str, str]]:
             r = client.get(url)
         if r.status_code != 200:
             return None
+        final_url = str(r.url)
+        if final_url != url and not is_public_url(final_url):
+            logger.info("blocked redirect to non-public URL: %s -> %s", url, final_url)
+            return None
         ctype = (r.headers.get("content-type") or "").lower()
         if "text/html" not in ctype and "application/xhtml" not in ctype:
             return None
         if len(r.content) > MAX_BYTES:
             logger.info("skipping %s — body exceeds %d bytes", url, MAX_BYTES)
             return None
-        return (r.text, str(r.url))
+        return (r.text, final_url)
     except httpx.HTTPError as e:
         logger.debug("fetch error for %s: %s", url, e)
         return None

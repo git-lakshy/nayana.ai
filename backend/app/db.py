@@ -1,14 +1,7 @@
-﻿"""SQLite persistence for Phase 1 of nayana.ai.
+"""SQLite persistence layer.
 
-Stores scans, pages, and chunks produced by the crawler. Schema is intentionally
-narrow for Phase 1 â€” questions/answers/gaps/fixes land in later phases.
-
-Design notes:
-- WAL journal for safe concurrent reads from the FastAPI threadpool
-- One connection per thread (sqlite3 is not safe across threads when shared)
-- Schema-tiny URL normalization + content hashing helpers live here too
-  because they are colocated with dedupe / change-detection logic.
-- Existing `db.json` (the v1 control-plane persistence) is untouched.
+Repository for scans, pages, chunks, questions, answers, scores, fixes, and score_history.
+WAL journal mode; one connection per thread.
 """
 from __future__ import annotations
 
@@ -423,8 +416,6 @@ def page_type_breakdown(scan_id: int) -> list[dict]:
     return [_row_to_dict(r) for r in cur.fetchall()]
 
 
-# ----- questions / answers / scores (Phase 3) -----
-
 def insert_question(scan_id: int, page_id: Optional[int], chunk_id: Optional[int],
                     text: str, intent_category: Optional[str],
                     ground_truth: str) -> Optional[int]:
@@ -533,7 +524,7 @@ def delete_answers_for_scan(scan_id: int) -> int:
     return cur.rowcount
 
 
-# ----- fixes (Phase 5) -----
+# ----- fixes -----
 
 def upsert_fixes(scan_id: int, fixes: list[dict], force: bool = False) -> None:
     """Insert fixes; if force=True, delete existing first."""
@@ -587,7 +578,7 @@ def update_fix_status(fix_id: int, status: str) -> None:
     )
 
 
-# ----- score history (Phase 7) -----
+# ----- score history -----
 
 def upsert_score_history(
     scan_id: int, domain: str,

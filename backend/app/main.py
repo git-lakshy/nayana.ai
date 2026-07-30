@@ -1,6 +1,7 @@
 import os
 import logging
 from typing import List, Optional
+from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -12,6 +13,7 @@ from starlette.responses import Response
 from backend.app.registry import AgentRegistry, AgentCard
 from backend.app import db as sqlite_db
 from backend.app import crawler as crawler_mod
+from backend.app import page_extract as page_extract_mod
 from backend.app import test_runner as test_runner_mod
 from backend.app import llm as llm_mod
 from backend.app import gap_analyzer as gap_analyzer_mod
@@ -26,9 +28,19 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Nayana.ai API", version="2.0.0")
 
+# CORS: a wildcard origin must never be combined with credentialed requests
+# (cookies) — configure allowed origins via CORS_ORIGINS (comma-separated).
+_cors_origins = [
+    o.strip() for o in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:8000,http://127.0.0.1:8000",
+    ).split(",") if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -61,6 +73,7 @@ class GuestCookieMiddleware(BaseHTTPMiddleware):
                 new_token,
                 httponly=True,
                 samesite="lax",
+                secure=auth.COOKIE_SECURE,
                 max_age=auth.GUEST_TOKEN_EXPIRE_DAYS * 86400,
             )
         return response
@@ -87,6 +100,61 @@ class CrawlRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Authorization helpers
+# ---------------------------------------------------------------------------
+
+def _scan_visible(scan: dict, identity: auth.Identity) -> bool:
+    """True if the caller may access this scan.
+
+    Admins see everything. Scans created before ownership tagging existed
+    (no user/org/guest owner) stay accessible to preserve legacy behaviour.
+    Otherwise a guest only sees scans from their own guest session, and a
+    user/API key only sees scans owned by them or their org.
+    """
+    if identity.has_feature("admin"):
+        return True
+    owner_user = scan.get("user_id")
+    owner_org = scan.get("org_id")
+    owner_guest = scan.get("guest_session_id")
+    if owner_user is None and owner_org is None and owner_guest is None:
+        return True  # legacy untagged scan
+    if identity.is_guest:
+        return owner_guest is not None and owner_guest == identity.guest_session_id
+    if identity.is_authenticated:
+        return (owner_org is not None and owner_org == identity.org_id) or \
+               (owner_user is not None and owner_user == identity.user_id)
+    return False
+
+
+def _get_owned_scan(scan_id: int, identity: auth.Identity) -> dict:
+    """Load a scan and enforce ownership. 404s for both missing and foreign
+    scans so scan ids cannot be enumerated by other tenants."""
+    scan = sqlite_db.get_scan(scan_id)
+    if not scan or not _scan_visible(scan, identity):
+        raise HTTPException(status_code=404, detail="Scan not found")
+    return scan
+
+
+async def require_admin(
+    request: Request,
+    identity: auth.Identity = Depends(auth.get_optional_identity),
+) -> auth.Identity:
+    """Gate for admin-only endpoints (browser LLM auth management, key
+    diagnostics). Allowed for identities with the 'admin' feature, or — in dev
+    mode only (NAYANA_ENV != 'prod') — for requests from the local machine."""
+    if identity.has_feature("admin"):
+        return identity
+    client_host = request.client.host if request.client else ""
+    if os.getenv("NAYANA_ENV", "dev").strip().lower() != "prod" \
+            and client_host in ("127.0.0.1", "::1", "localhost"):
+        return identity
+    raise HTTPException(
+        status_code=403,
+        detail={"code": "admin_required", "message": "Admin access required."},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Agent registry endpoints
 # ---------------------------------------------------------------------------
 
@@ -103,7 +171,7 @@ def get_agent(agent_id: str):
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: Crawler endpoints
+# Crawler endpoints
 # ---------------------------------------------------------------------------
 
 @app.post("/api/crawl")
@@ -118,14 +186,25 @@ def start_crawl(req: CrawlRequest,
     # Gate: check guest scan limit BEFORE starting the crawl
     auth.check_guest_scan_limit(identity)
 
-    logger.info("crawl request: %s (max_pages=%s, max_depth=%s) [%s]",
-                req.root_url, req.max_pages, req.max_depth, identity.kind)
+    # Validate the target URL (absolute http(s), publicly routable host).
+    root = (req.root_url or "").strip()
+    parsed = urlparse(root)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(status_code=422,
+                            detail="root_url must be an absolute http(s) URL")
+    if not page_extract_mod.is_public_url(root):
+        raise HTTPException(status_code=422,
+                            detail="root_url resolves to a private or non-routable address")
+
+    # Clamp crawl parameters server-side so clients cannot request unbounded work.
     cfg = {
-        "max_pages": req.max_pages,
-        "max_depth": req.max_depth,
-        "per_host_delay_ms": req.per_host_delay_ms,
+        "max_pages": max(1, min(int(req.max_pages or 25), 100)),
+        "max_depth": max(0, min(int(req.max_depth or 2), 3)),
+        "per_host_delay_ms": max(0, min(int(req.per_host_delay_ms or 200), 10000)),
     }
-    scan = crawler_mod.run_crawl(req.root_url, cfg)
+    logger.info("crawl request: %s (max_pages=%s, max_depth=%s) [%s]",
+                root, cfg["max_pages"], cfg["max_depth"], identity.kind)
+    scan = crawler_mod.run_crawl(root, cfg)
 
     # Tag scan with owner (user/org or guest session)
     scan_id = scan.get("id")
@@ -150,60 +229,71 @@ def start_crawl(req: CrawlRequest,
 
 
 @app.get("/api/scans")
-def list_scans(limit: int = 50):
-    return JSONResponse(content={"scans": sqlite_db.list_scans(limit=limit)})
+def list_scans(limit: int = 50,
+               identity: auth.Identity = Depends(auth.get_optional_identity)):
+    """List scans visible to the caller (own scans + legacy untagged ones)."""
+    scans = [s for s in sqlite_db.list_scans(limit=limit)
+             if _scan_visible(s, identity)]
+    return JSONResponse(content={"scans": scans})
 
 
 @app.get("/api/scans/{scan_id}")
-def get_scan(scan_id: int):
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+def get_scan(scan_id: int,
+             identity: auth.Identity = Depends(auth.get_optional_identity)):
+    scan = _get_owned_scan(scan_id, identity)
     payload = _serialize_scan(scan)
     payload["page_type_breakdown"] = sqlite_db.page_type_breakdown(scan_id)
     return JSONResponse(content=payload)
 
 
 @app.get("/api/scans/{scan_id}/pages")
-def list_scan_pages(scan_id: int, page_type: Optional[str] = None, limit: int = 500):
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+def list_scan_pages(scan_id: int, page_type: Optional[str] = None, limit: int = 500,
+                    identity: auth.Identity = Depends(auth.get_optional_identity)):
+    _get_owned_scan(scan_id, identity)
     rows = sqlite_db.list_pages(scan_id, page_type=page_type, limit=limit)
     return JSONResponse(content={"scan_id": scan_id, "pages": rows})
 
 
 @app.get("/api/scans/{scan_id}/chunks")
-def list_scan_chunks(scan_id: int, page_id: Optional[int] = None, limit: int = 500):
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+def list_scan_chunks(scan_id: int, page_id: Optional[int] = None, limit: int = 500,
+                     identity: auth.Identity = Depends(auth.get_optional_identity)):
+    _get_owned_scan(scan_id, identity)
     rows = sqlite_db.list_chunks(scan_id, page_id=page_id, limit=limit)
     return JSONResponse(content={"scan_id": scan_id, "chunks": rows})
 
 
 @app.get("/api/pages/{page_id}")
-def get_page_detail(page_id: int):
+def get_page_detail(page_id: int,
+                    identity: auth.Identity = Depends(auth.get_optional_identity)):
     page = sqlite_db.get_page(page_id)
     if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    # Authorize via the owning scan; 404 to avoid cross-tenant enumeration.
+    try:
+        _get_owned_scan(page["scan_id"], identity)
+    except HTTPException:
         raise HTTPException(status_code=404, detail="Page not found")
     chunks = sqlite_db.list_chunks(page["scan_id"], page_id=page_id, limit=2000)
     return JSONResponse(content={"page": page, "chunks": chunks})
 
 
 @app.get("/api/chunks/{chunk_id}")
-def get_chunk_detail(chunk_id: int):
+def get_chunk_detail(chunk_id: int,
+                     identity: auth.Identity = Depends(auth.get_optional_identity)):
     chunk = sqlite_db.get_chunk(chunk_id)
     if not chunk:
+        raise HTTPException(status_code=404, detail="Chunk not found")
+    try:
+        _get_owned_scan(chunk["scan_id"], identity)
+    except HTTPException:
         raise HTTPException(status_code=404, detail="Chunk not found")
     return JSONResponse(content={"chunk": chunk})
 
 
 @app.get("/api/scans/{scan_id}/gaps")
-def list_scan_gaps(scan_id: int):
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+def list_scan_gaps(scan_id: int,
+                   identity: auth.Identity = Depends(auth.get_optional_identity)):
+    _get_owned_scan(scan_id, identity)
     gaps = gap_analyzer_mod.analyze(scan_id)
     return JSONResponse(content={"scan_id": scan_id, "gaps": gaps})
 
@@ -224,7 +314,7 @@ def _serialize_scan(scan: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Multi-LLM test endpoints
+# Multi-LLM test endpoints
 # ---------------------------------------------------------------------------
 
 class TestRunRequest(BaseModel):
@@ -234,11 +324,10 @@ class TestRunRequest(BaseModel):
     competitors: Optional[List[str]] = None
 
 @app.post("/api/test/run")
-async def test_run(req: TestRunRequest):
+async def test_run(req: TestRunRequest,
+                   identity: auth.Identity = Depends(auth.get_optional_identity)):
     """Run the full multi-LLM test pipeline for a scan."""
-    scan = sqlite_db.get_scan(req.scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    _get_owned_scan(req.scan_id, identity)
 
     # Clear previous answers for this scan so runs are idempotent
     sqlite_db.delete_answers_for_scan(req.scan_id)
@@ -264,11 +353,10 @@ async def test_run(req: TestRunRequest):
 
 
 @app.get("/api/test/{scan_id}/summary")
-def test_summary(scan_id: int):
+def test_summary(scan_id: int,
+                 identity: auth.Identity = Depends(auth.get_optional_identity)):
     """Aggregated multi-LLM scores for a scan."""
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    _get_owned_scan(scan_id, identity)
 
     from collections import defaultdict
 
@@ -325,35 +413,37 @@ def test_summary(scan_id: int):
 
 
 @app.get("/api/test/{scan_id}/questions")
-def test_questions(scan_id: int):
+def test_questions(scan_id: int,
+                   identity: auth.Identity = Depends(auth.get_optional_identity)):
     """Return questions generated for a test run."""
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    _get_owned_scan(scan_id, identity)
     qs = sqlite_db.list_questions(scan_id)
     return JSONResponse({"scan_id": scan_id, "questions": qs})
 
 
 @app.get("/api/test/{scan_id}/answers")
-def test_answers(scan_id: int, provider: Optional[str] = None, limit: int = 500):
+def test_answers(scan_id: int, provider: Optional[str] = None, limit: int = 500,
+                 identity: auth.Identity = Depends(auth.get_optional_identity)):
     """Return answers (with scores) for a test run."""
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    _get_owned_scan(scan_id, identity)
     answers = sqlite_db.list_answers(scan_id, provider=provider, limit=limit)
     return JSONResponse({"scan_id": scan_id, "answers": answers})
 
 
 @app.delete("/api/test/{scan_id}")
-def test_delete(scan_id: int):
-    """Delete all test results for a scan (cascades to answers + scores)."""
+def test_delete(scan_id: int,
+                identity: auth.Identity = Depends(auth.get_optional_identity)):
+    """Delete all test results for a scan (cascades to answers + scores).
+    Destructive: requires ownership of the scan."""
+    _get_owned_scan(scan_id, identity)
     count = sqlite_db.delete_answers_for_scan(scan_id)
     return JSONResponse({"scan_id": scan_id, "deleted_answers": count})
 
 
 @app.get("/api/test/keys")
-def test_keys():
-    """Diagnostics: which LLM provider keys are currently configured."""
+def test_keys(identity: auth.Identity = Depends(require_admin)):
+    """Diagnostics: which LLM provider keys are currently configured.
+    Admin-only — reveals provider configuration."""
     from backend.app.llm import key_status
     return JSONResponse(key_status())
 
@@ -368,7 +458,7 @@ def health():
 
 
 # ---------------------------------------------------------------------------
-# Phase 5: Fix Generator
+# Fix Generator endpoints
 # ---------------------------------------------------------------------------
 
 class FixStatusUpdate(BaseModel):
@@ -376,11 +466,11 @@ class FixStatusUpdate(BaseModel):
 
 
 @app.get("/api/scans/{scan_id}/fixes")
-def list_fixes(scan_id: int, status: Optional[str] = None):
-    """List all generated fixes for a scan, optionally filtered by status."""
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+def list_fixes(scan_id: int, status: Optional[str] = None,
+               identity: auth.Identity = Depends(auth.require_feature("fixes"))):
+    """List all generated fixes for a scan, optionally filtered by status.
+    Requires a free account (fixes feature)."""
+    _get_owned_scan(scan_id, identity)
     fixes = sqlite_db.list_fixes(scan_id, status=status)
     return JSONResponse({"scan_id": scan_id, "fixes": fixes, "total": len(fixes)})
 
@@ -391,9 +481,7 @@ def generate_fixes(scan_id: int, force: bool = False,
     """Generate (or regenerate) LLM-powered fixes for all gaps in a scan.
     Requires a free account. Guests are prompted to register.
     """
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    _get_owned_scan(scan_id, identity)
     try:
         fixes = fix_generator_mod.generate(scan_id, force=force)
     except RuntimeError as e:
@@ -406,10 +494,9 @@ def generate_fixes(scan_id: int, force: bool = False,
 
 
 @app.get("/api/scans/{scan_id}/fixes/{fix_id}")
-def get_fix(scan_id: int, fix_id: int):
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+def get_fix(scan_id: int, fix_id: int,
+            identity: auth.Identity = Depends(auth.require_feature("fixes"))):
+    _get_owned_scan(scan_id, identity)
     fix = sqlite_db.get_fix(fix_id, scan_id)
     if not fix:
         raise HTTPException(status_code=404, detail="Fix not found")
@@ -417,11 +504,11 @@ def get_fix(scan_id: int, fix_id: int):
 
 
 @app.post("/api/scans/{scan_id}/fixes/{fix_id}/apply")
-def apply_fix(scan_id: int, fix_id: int):
-    """Mark a fix as applied (content must be applied manually or via PR)."""
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+def apply_fix(scan_id: int, fix_id: int,
+              identity: auth.Identity = Depends(auth.require_feature("fix_apply"))):
+    """Mark a fix as applied (content must be applied manually or via PR).
+    Requires the pro-plan fix_apply feature."""
+    _get_owned_scan(scan_id, identity)
     fix = sqlite_db.get_fix(fix_id, scan_id)
     if not fix:
         raise HTTPException(status_code=404, detail="Fix not found")
@@ -431,11 +518,10 @@ def apply_fix(scan_id: int, fix_id: int):
 
 
 @app.post("/api/scans/{scan_id}/fixes/{fix_id}/dismiss")
-def dismiss_fix(scan_id: int, fix_id: int):
+def dismiss_fix(scan_id: int, fix_id: int,
+                identity: auth.Identity = Depends(auth.require_feature("fixes"))):
     """Mark a fix as dismissed (won't show in pending list)."""
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    _get_owned_scan(scan_id, identity)
     fix = sqlite_db.get_fix(fix_id, scan_id)
     if not fix:
         raise HTTPException(status_code=404, detail="Fix not found")
@@ -445,15 +531,14 @@ def dismiss_fix(scan_id: int, fix_id: int):
 
 
 # ---------------------------------------------------------------------------
-# Phase 7: AI Visibility Score & History
+# AI Visibility Score & History endpoints
 # ---------------------------------------------------------------------------
 
 @app.get("/api/scans/{scan_id}/score")
-def get_scan_score(scan_id: int, save: bool = True):
+def get_scan_score(scan_id: int, save: bool = True,
+                   identity: auth.Identity = Depends(auth.get_optional_identity)):
     """Compute the AI visibility score for a scan."""
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    _get_owned_scan(scan_id, identity)
     result = scoring_engine_mod.compute(scan_id, save=save)
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
@@ -476,7 +561,7 @@ def list_domains():
 
 
 # ---------------------------------------------------------------------------
-# Phase 6: Competitor SOV
+# Competitor SOV endpoints
 # ---------------------------------------------------------------------------
 
 class SovLinkRequest(BaseModel):
@@ -488,13 +573,10 @@ class SovLinkRequest(BaseModel):
 @app.post("/api/sov/link")
 def link_competitor(req: SovLinkRequest,
                     identity: auth.Identity = Depends(auth.require_feature("sov"))):
-    """Link a competitor scan to a target scan for SOV comparison. Requires pro plan."""
-    parent = sqlite_db.get_scan(req.parent_scan_id)
-    if not parent:
-        raise HTTPException(status_code=404, detail="Parent scan not found")
-    comp = sqlite_db.get_scan(req.competitor_scan_id)
-    if not comp:
-        raise HTTPException(status_code=404, detail="Competitor scan not found")
+    """Link a competitor scan to a target scan for SOV comparison. Requires pro plan.
+    Both scans must be visible to the caller."""
+    _get_owned_scan(req.parent_scan_id, identity)
+    _get_owned_scan(req.competitor_scan_id, identity)
     result = sov_mod.link_competitor(
         req.parent_scan_id, req.competitor_scan_id, req.competitor_url
     )
@@ -502,21 +584,20 @@ def link_competitor(req: SovLinkRequest,
 
 
 @app.get("/api/sov/{scan_id}")
-def get_sov(scan_id: int):
-    """Return share-of-voice comparison for target scan vs linked competitors."""
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+def get_sov(scan_id: int,
+            identity: auth.Identity = Depends(auth.require_feature("sov"))):
+    """Return share-of-voice comparison for target scan vs linked competitors.
+    Requires pro plan."""
+    _get_owned_scan(scan_id, identity)
     result = sov_mod.compare(scan_id)
     return JSONResponse(result)
 
 
 @app.get("/api/sov/{scan_id}/competitors")
-def list_sov_competitors(scan_id: int):
-    """List competitor scans linked to this target scan."""
-    scan = sqlite_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+def list_sov_competitors(scan_id: int,
+                         identity: auth.Identity = Depends(auth.require_feature("sov"))):
+    """List competitor scans linked to this target scan. Requires pro plan."""
+    _get_owned_scan(scan_id, identity)
     competitors = sov_mod.list_competitor_links(scan_id)
     return JSONResponse({"scan_id": scan_id, "competitors": competitors})
 
@@ -530,7 +611,7 @@ def list_sov_competitors(scan_id: int):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/admin/llm-auth/status")
-def llm_auth_status():
+def llm_auth_status(identity: auth.Identity = Depends(require_admin)):
     """
     Returns authentication status for all browser LLM providers.
     Also shows whether Puppeteer is installed and ready.
@@ -554,7 +635,8 @@ def llm_auth_status():
 
 
 @app.post("/api/admin/llm-auth/start/{provider}")
-def llm_auth_start(provider: str, timeout: int = 300):
+def llm_auth_start(provider: str, timeout: int = 300,
+                   identity: auth.Identity = Depends(require_admin)):
     """
     Opens a VISIBLE browser window so you can log in to the specified provider.
     Blocks until login is detected (up to `timeout` seconds) then saves the session.
@@ -589,7 +671,8 @@ def llm_auth_start(provider: str, timeout: int = 300):
 
 
 @app.delete("/api/admin/llm-auth/{provider}")
-def llm_auth_clear(provider: str):
+def llm_auth_clear(provider: str,
+                   identity: auth.Identity = Depends(require_admin)):
     """
     Clears the saved session for a provider, effectively logging out.
     The next test run will use other available providers.
@@ -603,7 +686,8 @@ def llm_auth_clear(provider: str):
 
 
 @app.post("/api/admin/llm-auth/test/{provider}")
-def llm_auth_test(provider: str, question: str = "What is 2 + 2? Answer in one sentence."):
+def llm_auth_test(provider: str, question: str = "What is 2 + 2? Answer in one sentence.",
+                  identity: auth.Identity = Depends(require_admin)):
     """
     Quick smoke-test: ask a simple question through the specified browser provider
     and return the answer. Useful for verifying a session works before a full test run.
