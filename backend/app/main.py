@@ -1,31 +1,15 @@
-﻿import os
-import json
+import os
 import logging
-import time
-from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, Body
+from typing import List, Optional
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-
-from backend.app.registry import AgentRegistry, AgentCard
-from backend.app.agents import (
-    crawl_website,
-    evaluate_aeo_heuristics,
-    create_ingestion_agent,
-    create_user_intent_agent,
-    create_evaluation_agent,
-    create_competitor_agent,
-    create_content_gap_agent,
-    create_remediation_agent,
-    run_agent_workflow,
-    is_api_configured
-)
-from fastapi import Depends, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+from backend.app.registry import AgentRegistry, AgentCard
 from backend.app import db as sqlite_db
 from backend.app import crawler as crawler_mod
 from backend.app import test_runner as test_runner_mod
@@ -40,7 +24,7 @@ from backend.app.auth_routes import auth_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Enterprise A-EYE Swarm Control Plane", version="1.0.0")
+app = FastAPI(title="Nayana.ai API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -90,81 +74,21 @@ app.include_router(auth_router)
 # Registry instance
 registry = AgentRegistry()
 
-DB_FILE = os.path.join(os.path.dirname(__file__), "db.json")
 
-def load_db() -> dict:
-    if os.path.exists(DB_FILE):
-        try:
-            with open(DB_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading database: {e}")
-    # Fallback to default state if db.json is corrupted or not found
-    return {
-        "aeo_score_history": [],
-        "metrics": {"overall_aeo_score": 0, "question_success_rate": 0, "documentation_trust": 0, "total_scans_run": 0},
-        "competitors": [],
-        "remediation_queue": [],
-        "github_config": {"owner": "", "repo": "", "branch": "main", "token": ""}
-    }
-
-def save_db(data: dict):
-    try:
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        logger.error(f"Error saving database: {e}")
-
-def apply_patch_to_text(file_path: str, content: str, fix_id: str, target_text: Optional[str] = None, replacement_text: Optional[str] = None) -> str:
-    content_norm = content.replace("\r\n", "\n")
-    
-    # First attempt dynamic replacement if targets are specified
-    if target_text:
-        t_norm = target_text.replace("\r\n", "\n")
-        r_norm = replacement_text.replace("\r\n", "\n") if replacement_text else ""
-        if t_norm in content_norm:
-            logger.info(f"Applying dynamic replacement on {file_path}")
-            return content_norm.replace(t_norm, r_norm)
-            
-    # Fallback to hardcoded replacements for legacy items
-    if fix_id == "fix_api_docs":
-        target = "We have an API endpoint POST /api/scan that accepts a body with:\nurl - string representing target domain url\ncompetitors - list of competitor strings"
-        replacement = "| Parameter | Type | Required | Description |\n| :--- | :--- | :--- | :--- |\n| `url` | `string` | **Yes** | The absolute target domain URL to evaluate. |\n| `competitors` | `list[str]` | No | Optional URLs of competitors for benchmark. |"
-        content_norm = content_norm.replace(target, replacement)
-    elif fix_id == "fix_json_ld":
-        content_norm = content_norm.replace(
-            "export default function Dashboard() {",
-            "export default function Dashboard() {\n  const jsonLd = {\n    \"@context\": \"https://schema.org\",\n    \"@type\": \"Product\",\n    \"name\": \"A-EYE Platform\",\n    \"description\": \"AI Answer Engine Optimization Platform\"\n  };"
-        )
-        content_norm = content_norm.replace(
-            "  return (\n    <div className=\"min-h-screen bg-[#070707] text-[#9A9A9A] font-mono selection:bg-[#9A9A9A] selection:text-[#070707] pb-16\">",
-            "  return (\n    <div className=\"min-h-screen bg-[#070707] text-[#9A9A9A] font-mono selection:bg-[#9A9A9A] selection:text-[#070707] pb-16\">\n      <script\n        type=\"application/ld+json\"\n        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}\n      />"
-        )
-    elif fix_id == "fix_integrations" or fix_id.startswith("fix_scan_"):
-        target = "Integration steps are:\n- Configure Webhooks.\n- Receive events.\n- Process JSON payload."
-        replacement = "| Step | Action | Required Header | Description |\n| :--- | :--- | :--- | :--- |\n| 1 | Webhook Config | `Authorization` | Setup secure listener endpoint in dashboard. |\n| 2 | Event ingestion | `Content-Type` | Fast API processes JSON payload hooks. |"
-        content_norm = content_norm.replace(target, replacement)
-        
-    return content_norm
-
-class ScanRequest(BaseModel):
-    url: str
-    competitors: Optional[List[str]] = []
-
-class FixRequest(BaseModel):
-    fix_id: str
-
-class GitHubConfigReq(BaseModel):
-    owner: str
-    repo: str
-    branch: Optional[str] = "main"
-    token: Optional[str] = None
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
 
 class CrawlRequest(BaseModel):
     root_url: str
     max_pages: Optional[int] = 25
     max_depth: Optional[int] = 2
     per_host_delay_ms: Optional[int] = 200
+
+
+# ---------------------------------------------------------------------------
+# Agent registry endpoints
+# ---------------------------------------------------------------------------
 
 @app.get("/api/agents", response_model=List[AgentCard])
 def list_registered_agents():
@@ -177,500 +101,10 @@ def get_agent(agent_id: str):
         raise HTTPException(status_code=404, detail="Agent Card not found")
     return card
 
-@app.get("/api/metrics")
-def get_current_metrics():
-    return JSONResponse(content=load_db())
 
-@app.post("/api/scan")
-async def run_aeo_scan(req: ScanRequest):
-    url = req.url
-    competitors = req.competitors or []
-    
-    logger.info(f"Initiating AEO Swarm Scan for URL: {url} | Competitors: {competitors}")
-    
-    db = load_db()
-    
-    # 1. Scrape target
-    scraped_data = crawl_website(url)
-    
-    # 2. Run agent calculations
-    if is_api_configured():
-        try:
-            ingestion = create_ingestion_agent()
-            intent = create_user_intent_agent()
-            evaluation = create_evaluation_agent()
-            content_gap = create_content_gap_agent()
-            
-            ingestion_res = await run_agent_workflow(ingestion, f"Scrape and fetch content for: {url}")
-            intent_res = await run_agent_workflow(intent, f"Generate 5 search engine questions from this text: {ingestion_res}")
-            evaluation_res = await run_agent_workflow(evaluation, f"Evaluate answer trust for questions:\n{intent_res}\nUsing content:\n{ingestion_res}")
-            gap_res = await run_agent_workflow(content_gap, f"Analyze evaluation responses and compile missing schemas:\n{evaluation_res}")
-            
-            # Try to parse scores dynamically from Vertex AI response
-            import re
-            
-            # Default to dynamic heuristics base
-            results = evaluate_aeo_heuristics(scraped_data)
-            overall_score = results["overall_score"]
-            success_rate = results["confidence"]
-            doc_trust = results["trust"]
-            gaps = results["gaps"]
-            
-            # Extract scores from evaluation_res if present
-            conf_match = re.search(r"(?:confidence|success\s*rate|score):\s*(\d+)", evaluation_res, re.IGNORECASE)
-            trust_match = re.search(r"(?:trust|documentation\s*trust):\s*(\d+)", evaluation_res, re.IGNORECASE)
-            
-            if conf_match:
-                success_rate = float(conf_match.group(1))
-            if trust_match:
-                doc_trust = float(trust_match.group(1))
-                
-            # If ContentGapAgent provided gaps, parse them dynamically
-            if gap_res:
-                lines = [line.strip().lstrip("-* ").strip() for line in gap_res.split("\n") if line.strip()]
-                parsed_gaps = [line for line in lines if len(line) > 10 and not line.lower().startswith("here")][:4]
-                if parsed_gaps:
-                    gaps = parsed_gaps
-                    
-            # Compute dynamic overall score from success_rate and doc_trust
-            overall_score = int((success_rate + doc_trust) / 2)
-            overall_score = max(25, min(98, overall_score))
-        except Exception as e:
-            logger.error(f"Error running Vertex AI agents: {e}. Falling back to rules.")
-            results = evaluate_aeo_heuristics(scraped_data)
-            overall_score = results["overall_score"]
-            success_rate = results["confidence"]
-            doc_trust = results["trust"]
-            gaps = results["gaps"]
-    else:
-        logger.info("Vertex AI not configured, utilizing dynamic heuristic scanner.")
-        results = evaluate_aeo_heuristics(scraped_data)
-        overall_score = results["overall_score"]
-        success_rate = results["confidence"]
-        doc_trust = results["trust"]
-        gaps = results["gaps"]
-        
-    # 3. Dynamic Local Workspace Code Scan (Remove hardcoded data!)
-    # We inspect actual files on the local filesystem to identify pending gaps.
-    new_fixes = []
-    
-    # Gap check A: api-guide.md
-    api_guide_path = os.path.join(os.getcwd(), "docs", "api-guide.md")
-    if os.path.exists(api_guide_path):
-        with open(api_guide_path, "r", encoding="utf-8") as f:
-            api_content = f.read()
-        if "We have an API endpoint POST /api/scan that accepts a body with:" in api_content:
-            new_fixes.append({
-                "id": "fix_api_docs",
-                "file": "docs/api-guide.md",
-                "agent": "RemediationAgent",
-                "title": "Format API Parameter List as Table",
-                "description": "Unstructured API descriptions in docs/api-guide.md led to high hallucination scores. Structuring this as a markdown table fixes search perception.",
-                "target_text": "We have an API endpoint POST /api/scan that accepts a body with:\nurl - string representing target domain url\ncompetitors - list of competitor strings",
-                "replacement_text": "| Parameter | Type | Required | Description |\n| :--- | :--- | :--- | :--- |\n| `url` | `string` | **Yes** | The absolute target domain URL to evaluate. |\n| `competitors` | `list[str]` | No | Optional URLs of competitors for benchmark. |",
-                "diff": "- We have an API endpoint POST /api/scan that accepts a body with:\n- url - string representing target domain url\n- competitors - list of competitor strings\n+ | Parameter | Type | Required | Description |\n+ | :--- | :--- | :--- | :--- |\n+ | `url` | `string` | **Yes** | The absolute target domain URL to evaluate. |\n+ | `competitors` | `list[str]` | No | Optional URLs of competitors for benchmark. |",
-                "status": "pending"
-            })
-            
-    # Gap check B: integrations.md
-    integrations_path = os.path.join(os.getcwd(), "docs", "integrations.md")
-    if os.path.exists(integrations_path):
-        with open(integrations_path, "r", encoding="utf-8") as f:
-            int_content = f.read()
-        if "Integration steps are:" in int_content:
-            new_fixes.append({
-                "id": "fix_integrations",
-                "file": "docs/integrations.md",
-                "agent": "RemediationAgent",
-                "title": "Add Structured Integration Flow Table",
-                "description": "Unstructured steps inside docs/integrations.md make it difficult for crawlers to understand webhook properties. Format as a table to improve structure.",
-                "target_text": "Integration steps are:\n- Configure Webhooks.\n- Receive events.\n- Process JSON payload.",
-                "replacement_text": "| Step | Action | Required Header | Description |\n| :--- | :--- | :--- | :--- |\n| 1 | Webhook Config | `Authorization` | Setup secure listener endpoint in dashboard. |\n| 2 | Event ingestion | `Content-Type` | Fast API processes JSON payload hooks. |",
-                "diff": "- Integration steps are:\n- Configure Webhooks.\n- Receive events.\n- Process JSON payload.\n+ | Step | Action | Required Header | Description |\n+ | :--- | :--- | :--- | :--- |\n+ | 1 | Webhook Config | `Authorization` | Setup secure listener endpoint in dashboard. |\n+ | 2 | Event ingestion | `Content-Type` | Fast API processes JSON payload hooks. |",
-                "status": "pending"
-            })
-            
-    # Gap check C: JSON-LD on frontend landing page
-    landing_page_path = os.path.join(os.getcwd(), "frontend", "src", "app", "page.tsx")
-    if os.path.exists(landing_page_path):
-        with open(landing_page_path, "r", encoding="utf-8") as f:
-            page_content = f.read()
-        if "dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}" not in page_content:
-            new_fixes.append({
-                "id": "fix_json_ld",
-                "file": "frontend/src/app/page.tsx",
-                "agent": "RemediationAgent",
-                "title": "Add JSON-LD Schema to Landing Page",
-                "description": "The Content Gap Agent detected missing JSON-LD schema describing core product metadata, causing low scoring from AI answers.",
-                "target_text": None,
-                "replacement_text": None,
-                "diff": "  export default function Dashboard() {\n+   const jsonLd = {\n+     \"@context\": \"https://schema.org\",\n+     \"@type\": \"Product\",\n+     \"name\": \"A-EYE Platform\",\n+     \"description\": \"AI Answer Engine Optimization Platform\"\n+   };\n+   // Rendered schema script block",
-                "status": "pending"
-            })
-
-    # Adjust current scores depending on actual gaps found on disk!
-    active_gaps_count = len(new_fixes)
-    if active_gaps_count == 3:
-        overall_score = min(62, overall_score)
-        doc_trust = min(65.0, doc_trust)
-    elif active_gaps_count == 2:
-        overall_score = min(72, overall_score)
-        doc_trust = min(75.0, doc_trust)
-    elif active_gaps_count == 1:
-        overall_score = min(84, overall_score)
-        doc_trust = min(85.0, doc_trust)
-    else:
-        overall_score = max(92, overall_score)
-        doc_trust = max(94.0, doc_trust)
-
-    # 4. Save metrics update
-    db["metrics"]["overall_aeo_score"] = int(overall_score)
-    db["metrics"]["question_success_rate"] = round(success_rate, 1)
-    db["metrics"]["documentation_trust"] = round(doc_trust, 1)
-    db["metrics"]["total_scans_run"] += 1
-    
-    # Add new date entry to history
-    from datetime import date
-    today_str = date.today().isoformat()
-    db["aeo_score_history"].append({"date": today_str, "score": int(overall_score)})
-    
-    # Update competitors safely to avoid index out of range error
-    if not db.get("competitors"):
-        db["competitors"] = [{"name": "Our Website (Enterprise Platform)", "url": url, "score": int(overall_score)}]
-    else:
-        db["competitors"][0]["url"] = url
-        db["competitors"][0]["score"] = int(overall_score)
-    
-    if competitors:
-        new_competitors = [{"name": "Our Website (Enterprise Platform)", "url": url, "score": int(overall_score)}]
-        for idx, c_url in enumerate(competitors):
-            c_name = f"Competitor {chr(65 + idx)}"
-            c_score = 68 + (sum(ord(c) for c in c_url) % 22)
-            new_competitors.append({"name": c_name, "url": c_url, "score": c_score})
-        db["competitors"] = new_competitors
-        
-    # Update remediation queue with found gaps dynamically
-    current_remediation = {fix["id"]: fix for fix in db.get("remediation_queue", [])}
-    updated_queue = []
-    found_ids = set()
-    
-    for fix in new_fixes:
-        fix_id = fix["id"]
-        found_ids.add(fix_id)
-        if fix_id in current_remediation:
-            old_fix = current_remediation[fix_id]
-            old_fix["status"] = "pending"
-            updated_queue.append(old_fix)
-        else:
-            updated_queue.append(fix)
-            
-    for fix_id, fix in current_remediation.items():
-        if fix_id not in found_ids and fix["status"] == "applied":
-            updated_queue.append(fix)
-            
-    db["remediation_queue"] = updated_queue
-    
-    save_db(db)
-    
-    return JSONResponse(content={
-        "status": "success",
-        "overall_aeo_score": int(overall_score),
-        "question_success_rate": round(success_rate, 1),
-        "documentation_trust": round(doc_trust, 1),
-        "competitors": db["competitors"],
-        "remediation_queue": db["remediation_queue"]
-    })
-
-@app.post("/api/fix")
-async def apply_remediation_fix(req: FixRequest):
-    fix_id = req.fix_id
-    logger.info(f"Applying remediation fix: {fix_id}")
-    
-    db = load_db()
-    
-    # Locate fix
-    target_fix = None
-    for fix in db.get("remediation_queue", []):
-        if fix["id"] == fix_id:
-            target_fix = fix
-            break
-            
-    if not target_fix:
-        raise HTTPException(status_code=404, detail="Fix proposal not found")
-        
-    if target_fix["status"] == "applied":
-        return JSONResponse(content={"status": "already_applied", "message": "Fix has already been successfully applied."})
-        
-    # Apply local filesystem write
-    file_path = os.path.join(os.getcwd(), target_fix["file"])
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-                
-            content_norm = apply_patch_to_text(
-                target_fix["file"], 
-                content, 
-                fix_id, 
-                target_fix.get("target_text"), 
-                target_fix.get("replacement_text")
-            )
-            
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(content_norm)
-            logger.info(f"Successfully applied and wrote fix to {file_path}")
-        except Exception as e:
-            logger.error(f"Error applying patch to {file_path}: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to write patch to file: {str(e)}")
-    else:
-        logger.warning(f"Target file {file_path} not found in workspace to apply patch.")
-        
-    # Mark fix as applied
-    target_fix["status"] = "applied"
-    
-    # Boost AEO scores dynamically
-    db["metrics"]["overall_aeo_score"] = min(98, db["metrics"]["overall_aeo_score"] + 8)
-    db["metrics"]["documentation_trust"] = min(98.0, db["metrics"]["documentation_trust"] + 6.5)
-    
-    # Append score history
-    from datetime import date
-    today_str = date.today().isoformat()
-    db["aeo_score_history"].append({"date": today_str, "score": db["metrics"]["overall_aeo_score"]})
-    db["competitors"][0]["score"] = db["metrics"]["overall_aeo_score"]
-    
-    save_db(db)
-    
-    return JSONResponse(content={
-        "status": "success",
-        "message": f"Successfully applied changes to {target_fix['file']}",
-        "updated_score": db["metrics"]["overall_aeo_score"]
-    })
-
-# --- GitHub Linking & PR Endpoints ---
-
-@app.get("/api/github/config")
-def get_github_config():
-    db = load_db()
-    cfg = db.get("github_config", {"owner": "", "repo": "", "branch": "main", "token": ""})
-    masked_token = ""
-    if cfg.get("token"):
-        t = cfg["token"]
-        masked_token = t[:4] + "*" * (len(t) - 8) + t[-4:] if len(t) > 8 else "****"
-    return {
-        "owner": cfg.get("owner", ""),
-        "repo": cfg.get("repo", ""),
-        "branch": cfg.get("branch", "main"),
-        "has_token": bool(cfg.get("token")),
-        "masked_token": masked_token
-    }
-
-@app.post("/api/github/config")
-def save_github_config(req: GitHubConfigReq):
-    db = load_db()
-    cfg = db.get("github_config", {})
-    cfg["owner"] = req.owner
-    cfg["repo"] = req.repo
-    if req.branch:
-        cfg["branch"] = req.branch
-    if req.token is not None and req.token.strip() != "":
-        cfg["token"] = req.token.strip()
-    db["github_config"] = cfg
-    save_db(db)
-    return {"status": "success", "message": "GitHub configuration saved successfully."}
-
-@app.post("/api/github/share")
-async def share_scan_report():
-    import httpx
-    db = load_db()
-    cfg = db.get("github_config", {})
-    owner = cfg.get("owner")
-    repo = cfg.get("repo")
-    branch = cfg.get("branch", "main")
-    token = cfg.get("token")
-    
-    if not (owner and repo and token):
-        raise HTTPException(status_code=400, detail="GitHub integration is not configured. Please save credentials first.")
-        
-    # Generate report markdown content
-    m = db["metrics"]
-    gaps_list = [f"- {fix['title']} in `{fix['file']}`" for fix in db.get("remediation_queue", []) if fix["status"] == "pending"]
-    gaps_str = "\n".join(gaps_list) if gaps_list else "- No critical gaps remaining. Optimized."
-    
-    report_md = f"""# A-EYE Optimization Report
-Generated on: {time.strftime('%Y-%m-%d %H:%M:%S')}
-
-## Performance Telemetry
-- **Overall A-EYE Score**: {m['overall_aeo_score']}%
-- **AI Confidence Score**: {m['question_success_rate']}%
-- **Documentation Trust Index**: {m['documentation_trust']}%
-- **Total Swarm Scans Executed**: {m['total_scans_run']}
-
-## Unresolved Optimization Gaps
-{gaps_str}
-
----
-*Powered by A-EYE Enterprise Answer Engine Optimization Swarm.*
-"""
-    headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "A-EYE-Orchestrator/1.0"
-    }
-    
-    import base64
-    encoded_report = base64.b64encode(report_md.encode("utf-8")).decode("utf-8")
-    
-    async with httpx.AsyncClient() as client:
-        # Get existing report SHA if it exists
-        get_file_url = f"https://api.github.com/repos/{owner}/{repo}/contents/aeo-report.md?ref={branch}"
-        r_get = await client.get(get_file_url, headers=headers)
-        sha = None
-        if r_get.status_code == 200:
-            sha = r_get.json().get("sha")
-            
-        # Put file to branch
-        put_url = f"https://api.github.com/repos/{owner}/{repo}/contents/aeo-report.md"
-        put_body = {
-            "message": "A-EYE: Update Answer Engine Optimization Scan Report",
-            "content": encoded_report,
-            "branch": branch
-        }
-        if sha:
-            put_body["sha"] = sha
-            
-        r_put = await client.put(put_url, headers=headers, json=put_body)
-        if r_put.status_code not in (200, 201):
-            raise HTTPException(status_code=400, detail=f"Failed to commit report to GitHub: {r_put.text}")
-            
-        commit_url = r_put.json()["commit"]["html_url"]
-        return {"status": "success", "message": "Scan report pushed to GitHub.", "commit_url": commit_url}
-
-@app.post("/api/github/pr")
-async def create_github_pr(req: FixRequest):
-    import httpx
-    db = load_db()
-    fix_id = req.fix_id
-    
-    cfg = db.get("github_config", {})
-    owner = cfg.get("owner")
-    repo = cfg.get("repo")
-    branch = cfg.get("branch", "main")
-    token = cfg.get("token")
-    
-    if not (owner and repo and token):
-        raise HTTPException(status_code=400, detail="GitHub integration is not configured. Please save credentials first.")
-        
-    target_fix = None
-    for fix in db.get("remediation_queue", []):
-        if fix["id"] == fix_id:
-            target_fix = fix
-            break
-            
-    if not target_fix:
-        raise HTTPException(status_code=404, detail="Fix not found in queue.")
-        
-    headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "A-EYE-Orchestrator/1.0"
-    }
-    
-    async with httpx.AsyncClient() as client:
-        # 1. Get SHA of the base branch
-        base_ref_url = f"https://api.github.com/repos/{owner}/{repo}/git/ref/heads/{branch}"
-        r_ref = await client.get(base_ref_url, headers=headers)
-        if r_ref.status_code != 200:
-            raise HTTPException(status_code=400, detail=f"Failed to get branch '{branch}': {r_ref.text}")
-        base_sha = r_ref.json()["object"]["sha"]
-        
-        # 2. Create a unique branch for the fix
-        new_branch = f"aeo-patch-{fix_id}-{int(time.time())}"
-        create_ref_url = f"https://api.github.com/repos/{owner}/{repo}/git/refs"
-        ref_body = {"ref": f"refs/heads/{new_branch}", "sha": base_sha}
-        r_create_ref = await client.post(create_ref_url, headers=headers, json=ref_body)
-        if r_create_ref.status_code != 201:
-            raise HTTPException(status_code=400, detail=f"Failed to create ref: {r_create_ref.text}")
-            
-        # 3. Get target file content & SHA on the base branch
-        file_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{target_fix['file']}?ref={branch}"
-        r_file = await client.get(file_url, headers=headers)
-        
-        file_sha = None
-        current_content = ""
-        
-        if r_file.status_code == 200:
-            file_data = r_file.json()
-            file_sha = file_data["sha"]
-            import base64
-            current_content = base64.b64decode(file_data["content"]).decode("utf-8")
-        else:
-            # Fallback to local file if missing on Github
-            local_path = os.path.join(os.getcwd(), target_fix["file"])
-            if os.path.exists(local_path):
-                with open(local_path, "r", encoding="utf-8") as lf:
-                    current_content = lf.read()
-                    
-        # 4. Apply patch text
-        updated_content = apply_patch_to_text(
-            target_fix["file"], 
-            current_content, 
-            fix_id, 
-            target_fix.get("target_text"), 
-            target_fix.get("replacement_text")
-        )
-        import base64
-        encoded_content = base64.b64encode(updated_content.encode("utf-8")).decode("utf-8")
-        
-        # 5. Commit change to new branch
-        put_file_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{target_fix['file']}"
-        put_body = {
-            "message": f"A-EYE: Apply fix '{target_fix['title']}'",
-            "content": encoded_content,
-            "branch": new_branch
-        }
-        if file_sha:
-            put_body["sha"] = file_sha
-            
-        r_put_file = await client.put(put_file_url, headers=headers, json=put_body)
-        if r_put_file.status_code not in (200, 201):
-            raise HTTPException(status_code=400, detail=f"Failed to write commit: {r_put_file.text}")
-            
-        # 6. Create Pull Request
-        pr_url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
-        pr_body = {
-            "title": f"A-EYE: {target_fix['title']}",
-            "head": new_branch,
-            "base": branch,
-            "body": f"This Pull Request was autonomously generated by **A-EYE** to fix an optimization gap:\n\n**Issue:** {target_fix['description']}\n\n**Target File:** `{target_fix['file']}`\n\nReview and merge to improve your AI Answer Engine Optimization (AEO) score."
-        }
-        r_pr = await client.post(pr_url, headers=headers, json=pr_body)
-        if r_pr.status_code != 201:
-            raise HTTPException(status_code=400, detail=f"Failed to create PR: {r_pr.text}")
-            
-        pr_data = r_pr.json()
-        pr_html_url = pr_data["html_url"]
-        
-        # Mark as applied in local DB
-        target_fix["status"] = "applied"
-        db["metrics"]["overall_aeo_score"] = min(98, db["metrics"]["overall_aeo_score"] + 8)
-        db["metrics"]["documentation_trust"] = min(98.0, db["metrics"]["documentation_trust"] + 6.5)
-        
-        from datetime import date
-        today_str = date.today().isoformat()
-        db["aeo_score_history"].append({"date": today_str, "score": db["metrics"]["overall_aeo_score"]})
-        db["competitors"][0]["score"] = db["metrics"]["overall_aeo_score"]
-        
-        save_db(db)
-        
-        return {
-            "status": "success",
-            "message": f"Successfully created GitHub Pull Request for '{target_fix['title']}'",
-            "pr_url": pr_html_url,
-            "branch": new_branch,
-            "updated_score": db["metrics"]["overall_aeo_score"]
-        }
-
-# --- Phase 1 crawler endpoints ---
+# ---------------------------------------------------------------------------
+# Phase 1: Crawler endpoints
+# ---------------------------------------------------------------------------
 
 @app.post("/api/crawl")
 def start_crawl(req: CrawlRequest,
@@ -705,7 +139,6 @@ def start_crawl(req: CrawlRequest,
 
     # Include quota info in response so frontend can update the counter
     if identity.is_guest:
-        # Re-count after tagging so the number is accurate
         used = auth_db.count_guest_scans_for_session(identity.guest_session_id) if identity.guest_session_id else 0
         result["guest_quota"] = {
             "scans_used": used,
@@ -790,8 +223,9 @@ def _serialize_scan(scan: dict) -> dict:
     return out
 
 
-
-# --- Phase 3 multi-LLM test endpoints ---
+# ---------------------------------------------------------------------------
+# Phase 3: Multi-LLM test endpoints
+# ---------------------------------------------------------------------------
 
 class TestRunRequest(BaseModel):
     scan_id: int
@@ -923,14 +357,19 @@ def test_keys():
     from backend.app.llm import key_status
     return JSONResponse(key_status())
 
-# --- Health check ---
+
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
 
 @app.get("/api/health")
 def health():
-    return JSONResponse({"status": "ok", "version": "1.0.0"})
+    return JSONResponse({"status": "ok", "version": "2.0.0"})
 
 
-# --- Phase 5: Fix Generator ---
+# ---------------------------------------------------------------------------
+# Phase 5: Fix Generator
+# ---------------------------------------------------------------------------
 
 class FixStatusUpdate(BaseModel):
     status: str  # applied | dismissed | pending
@@ -1005,7 +444,9 @@ def dismiss_fix(scan_id: int, fix_id: int):
     return JSONResponse({"status": "dismissed", "fix": updated})
 
 
-# --- Phase 7: AI Visibility Score & History ---
+# ---------------------------------------------------------------------------
+# Phase 7: AI Visibility Score & History
+# ---------------------------------------------------------------------------
 
 @app.get("/api/scans/{scan_id}/score")
 def get_scan_score(scan_id: int, save: bool = True):
@@ -1034,7 +475,9 @@ def list_domains():
     return JSONResponse({"domains": domains})
 
 
-# --- Phase 6: Competitor SOV ---
+# ---------------------------------------------------------------------------
+# Phase 6: Competitor SOV
+# ---------------------------------------------------------------------------
 
 class SovLinkRequest(BaseModel):
     parent_scan_id: int
@@ -1076,15 +519,6 @@ def list_sov_competitors(scan_id: int):
         raise HTTPException(status_code=404, detail="Scan not found")
     competitors = sov_mod.list_competitor_links(scan_id)
     return JSONResponse({"scan_id": scan_id, "competitors": competitors})
-
-
-# --- CLI test endpoint (diagnostics) ---
-
-@app.get("/api/test/keys")
-def test_keys_endpoint():
-    """Diagnostics: which LLM provider keys and browser adapters are configured."""
-    from backend.app.llm import key_status
-    return JSONResponse(key_status())
 
 
 # ---------------------------------------------------------------------------

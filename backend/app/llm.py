@@ -246,29 +246,10 @@ class DeepSeekAdapter:
             return ProviderResult(self.name, self.model, "", 0, error=f"setup: {e}")
 
 
-# ----- Mock adapter (dry-run fallback) -----
-
-class MockAdapter:
-    name = "mock"
-    model = "mock-llm"
-
-    def is_configured(self) -> bool:
-        return True
-
-    def complete(self, prompt: str, *, system: Optional[str] = None) -> ProviderResult:
-        """Deterministic no-external-answer adapter for local pipeline testing."""
-        snippet = (prompt or "").strip().replace("\n", " ")[:200]
-        text = f"This is a mock answer. The question was: {snippet}"
-        return ProviderResult(self.name, self.model, text, latency_ms=5)
-
-
 # ----- registry -----
 
 ADAPTERS = [GeminiAdapter(), OpenAIAdapter(), ClaudeAdapter(),
             PerplexityAdapter(), DeepSeekAdapter()]
-
-# Fallback mock adapter is returned when no real provider keys are configured.
-MOCK_ADAPTER = MockAdapter()
 
 
 def available_adapters() -> List:
