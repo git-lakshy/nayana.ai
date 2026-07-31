@@ -8,6 +8,7 @@ import GlassCard from "@/components/ui/GlassCard";
 import TerminalPanel from "@/components/ui/TerminalPanel";
 import ScorePill from "@/components/ui/ScorePill";
 import BadgeChip from "@/components/ui/BadgeChip";
+import ProviderIcon from "@/components/ui/ProviderIcon";
 import { api } from "@/lib/api";
 import type { Answer, Question, Scan, TestRunResult } from "@/lib/types";
 import { hostOf } from "@/components/dashboard/RecentScans";
@@ -110,17 +111,29 @@ export default function TestLabTab({ scan }: { scan: Scan }) {
           return (
             <div
               key={p}
-              className="glass flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm"
+              className={
+                "flex items-center gap-2.5 rounded-xl border px-3.5 py-2 text-sm transition-colors " +
+                (active
+                  ? "border-mint/40 bg-mint/[0.06] text-ink"
+                  : "border-line bg-frame/40 text-ink-dim")
+              }
             >
+              <ProviderIcon provider={p} size={22} glow={active} />
+              <span className="font-medium text-ink">{LABELS[p]}</span>
               <span
                 className={
-                  "h-2 w-2 rounded-full " + (active ? "bg-mint" : "bg-ink/25")
+                  "font-mono text-[10px] uppercase tracking-wide " +
+                  (active ? "text-mint" : "text-ink-dim/70")
+                }
+              >
+                {active ? "active" : "idle"}
+              </span>
+              <span
+                className={
+                  "h-1.5 w-1.5 rounded-full " +
+                  (active ? "bg-mint shadow-[0_0_6px_var(--mint)]" : "bg-ink/25")
                 }
               />
-              <span className="text-ink">{LABELS[p]}</span>
-              <span className="text-xs text-ink-dim">
-                {active ? "Active" : "Inactive"}
-              </span>
             </div>
           );
         })}
@@ -137,7 +150,12 @@ export default function TestLabTab({ scan }: { scan: Scan }) {
                 <th className="px-6 py-3 font-medium">Question</th>
                 {PROVIDERS.map((p) => (
                   <th key={p} className="px-4 py-3 text-center font-medium">
-                    {LABELS[p]}
+                    <div className="flex flex-col items-center gap-1">
+                      <ProviderIcon provider={p} size={22} />
+                      <span className="text-[10px] tracking-wide text-pine/60">
+                        {LABELS[p]}
+                      </span>
+                    </div>
                   </th>
                 ))}
                 <th className="px-4 py-3" />

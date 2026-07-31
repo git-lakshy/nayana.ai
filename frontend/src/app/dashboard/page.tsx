@@ -10,6 +10,7 @@ import AppShell from "@/components/nav/AppShell";
 import StatCard from "@/components/ui/StatCard";
 import NewScanCard from "@/components/dashboard/NewScanCard";
 import RecentScans, { hostOf } from "@/components/dashboard/RecentScans";
+import AsciiDune from "@/components/bg/AsciiDune";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import type { Scan } from "@/lib/types";
@@ -96,9 +97,30 @@ export default function DashboardPage() {
   const quotaRemaining = identity?.guest_scans_remaining ?? null;
   const quotaLimit = identity?.guest_scan_limit ?? 5;
 
+  const displayName = identity?.email?.split("@")[0] ?? (isGuest ? "guest" : "there");
+
   return (
     <AppShell>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      {/* Decorative dune silhouette anchored to bottom of viewport */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-x-0 bottom-0 z-0 h-72 overflow-hidden opacity-[0.18]"
+      >
+        <AsciiDune className="absolute inset-x-0 bottom-0 w-full" />
+        <div className="absolute inset-0 bg-gradient-to-b from-pine via-pine/70 to-transparent" />
+      </div>
+
+      {/* Greeting */}
+      <div className="relative z-10 flex flex-wrap items-end justify-between gap-2">
+        <h1 className="font-display text-3xl font-semibold text-ink">
+          Welcome back, <span className="text-mint text-glow">{displayName}</span>
+        </h1>
+        <p className="font-mono text-xs text-ink-dim">
+          {scans.length} scan{scans.length === 1 ? "" : "s"} · {domainCount} domain{domainCount === 1 ? "" : "s"}
+        </p>
+      </div>
+
+      <div className="relative z-10 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard
           label="AI Visibility Score"
           value={latestScore === null ? "—" : Math.round(latestScore)}
@@ -135,9 +157,13 @@ export default function DashboardPage() {
         )}
       </div>
 
-      <NewScanCard onStarted={handleStarted} onSettled={handleSettled} />
+      <div className="relative z-10">
+        <NewScanCard onStarted={handleStarted} onSettled={handleSettled} />
+      </div>
 
-      <RecentScans scans={scans} loading={loading} />
+      <div className="relative z-10">
+        <RecentScans scans={scans} loading={loading} />
+      </div>
     </AppShell>
   );
 }

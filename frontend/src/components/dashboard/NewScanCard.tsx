@@ -74,15 +74,25 @@ export default function NewScanCard({ onStarted, onSettled }: NewScanCardProps) 
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, delay: 0.2 }}
     >
-      <h2 className="font-display text-xl font-semibold text-ink">New Scan</h2>
+      <h2 className="font-display text-xl font-semibold text-ink">
+        New Scan
+      </h2>
+      <p className="mt-1 text-xs text-ink-dim">
+        Point Nayana at a site — we crawl, chunk, and query top AI providers.
+      </p>
       <form onSubmit={submit} className="mt-5 flex flex-col gap-4">
-        <input
-          type="text"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://yoursite.com"
-          className="rounded-full border border-line bg-ink/5 px-5 py-3 text-center font-mono text-sm text-ink outline-none transition-colors placeholder:text-ink-dim/60 focus:border-mint"
-        />
+        <div className="relative">
+          <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 font-mono text-xs text-mint/70">
+            ›
+          </span>
+          <input
+            type="text"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://yoursite.com"
+            className="w-full rounded-full border border-line-strong bg-pine-800/60 py-3 pl-10 pr-5 text-center font-mono text-sm text-ink outline-none transition-colors placeholder:text-ink-dim/50 focus:border-mint focus:bg-pine-800"
+          />
+        </div>
 
         <div className="flex flex-wrap items-center justify-center gap-3 text-sm">
           <PillGroup label="Max Pages" options={PAGE_OPTIONS} value={maxPages} onChange={setMaxPages} />

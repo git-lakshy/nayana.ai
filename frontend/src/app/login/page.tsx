@@ -1,17 +1,21 @@
 "use client";
 
-// Sign in / Create account — glass card over the dot-matrix dome,
-// with the "Try as Guest — 5 free scans" ghost button.
+// Sign in / Create account — glass card floating in a soft mint glow bloom,
+// ASCII dune silhouette along the bottom, dark filled pill inputs, and the
+// "Try as Guest — 5 free scans" ghost button. Matches the Phase-1 wireframe.
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import Logo from "@/components/ui/Logo";
-import DotMatrix from "@/components/bg/DotMatrix";
+import AsciiDune from "@/components/bg/AsciiDune";
 import { useAuth } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
 
 type Mode = "signin" | "register";
+
+const INPUT_CLS =
+  "rounded-full border border-line bg-[#060d0a]/70 px-5 py-3 text-sm text-ink outline-none transition-all placeholder:text-ink-dim/50 focus:border-mint focus:shadow-[0_0_0_3px_rgba(169,229,197,0.15)]";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -59,7 +63,16 @@ export default function LoginPage() {
 
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-pine px-4">
-      <DotMatrix opacity={0.7} />
+      {/* Mint glow bloom behind the card */}
+      <div
+        aria-hidden
+        className="absolute left-1/2 top-1/2 h-[42rem] w-[42rem] -translate-x-1/2 -translate-y-1/2 rounded-full"
+        style={{
+          background:
+            "radial-gradient(closest-side, rgba(169,229,197,0.20), rgba(169,229,197,0.06) 55%, transparent 75%)",
+        }}
+      />
+      <AsciiDune opacity={0.5} />
 
       <motion.div
         initial={{ opacity: 0, y: 24 }}
@@ -105,7 +118,7 @@ export default function LoginPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Your name"
-                className="rounded-full border border-line bg-transparent px-4 py-2.5 text-ink outline-none transition-colors placeholder:text-ink-dim/60 focus:border-mint"
+                className={INPUT_CLS}
               />
             </label>
           )}
@@ -118,7 +131,7 @@ export default function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="Email"
-              className="rounded-full border border-line bg-transparent px-4 py-2.5 text-ink outline-none transition-colors placeholder:text-ink-dim/60 focus:border-mint"
+              className={INPUT_CLS}
             />
           </label>
 
@@ -131,7 +144,7 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Password"
-              className="rounded-full border border-line bg-transparent px-4 py-2.5 text-ink outline-none transition-colors placeholder:text-ink-dim/60 focus:border-mint"
+              className={INPUT_CLS}
             />
           </label>
 

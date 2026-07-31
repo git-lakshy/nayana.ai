@@ -1,21 +1,43 @@
 "use client";
 
-// Landing page — dark pine hero with dot-matrix dome, provider constellation,
-// curved transition to off-white, how-it-works terminal demo, features grid,
-// dark CTA band. Hero "Run Free Scan" posts /api/crawl as guest and redirects
-// to the scan report.
+// Landing page — dark pine hero with a dot-matrix globe dome, orbiting provider
+// icon chips, curved transition to off-white, stat band, how-it-works terminal
+// demo, features grid, dark CTA band. Hero "Run Free Scan" posts /api/crawl as
+// a guest and redirects to the scan report page.
 
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import Logo from "@/components/ui/Logo";
-import DotMatrix from "@/components/bg/DotMatrix";
+import DotGlobe from "@/components/bg/DotGlobe";
+import ProviderIcon from "@/components/ui/ProviderIcon";
 import TerminalPanel from "@/components/ui/TerminalPanel";
 import { api, ApiError } from "@/lib/api";
 import type { CrawlResponse } from "@/lib/types";
 
-const PROVIDERS = ["ChatGPT", "Perplexity", "Claude", "Gemini", "Grok"];
+const NAV = [
+  { label: "Home", href: "/", active: true },
+  { label: "Product", href: "#features" },
+  { label: "Scan", href: "#hero" },
+  { label: "Pricing", href: "#pricing" },
+  { label: "Resources", href: "#how" },
+  { label: "Company", href: "#footer" },
+];
+
+// Provider chips orbit the globe on gently rotating elliptical arcs.
+const ORBIT: {
+  provider: string;
+  angleDeg: number; // 0 = right, 90 = bottom, -90 = top
+  rxPct: number; // ellipse rx as % of viewport width
+  ryPct: number; // ellipse ry as % of viewport width
+}[] = [
+  { provider: "chatgpt", angleDeg: -155, rxPct: 46, ryPct: 22 },
+  { provider: "claude", angleDeg: -18, rxPct: 46, ryPct: 22 },
+  { provider: "perplexity", angleDeg: 170, rxPct: 32, ryPct: 34 },
+  { provider: "grok", angleDeg: 30, rxPct: 40, ryPct: 30 },
+  { provider: "gemini", angleDeg: -95, rxPct: 22, ryPct: 46 },
+];
 
 const DEMO_LINES = [
   "$ nayana scan https://acme.com",
@@ -30,36 +52,12 @@ const DEMO_LINES = [
 ];
 
 const FEATURES: { icon: string; title: string; body: string }[] = [
-  {
-    icon: "◉",
-    title: "See what AI sees",
-    body: "Crawl your site the way answer engines do — page types, chunks, schema and all.",
-  },
-  {
-    icon: "⚋",
-    title: "Test 5 providers",
-    body: "Ask ChatGPT, Perplexity, Claude, Gemini and Grok real questions about your product.",
-  },
-  {
-    icon: "┆",
-    title: "Visibility score",
-    body: "One score across coverage, accuracy, attribution and confidence — tracked over time.",
-  },
-  {
-    icon: "✦",
-    title: "Fix the gaps",
-    body: "AI-generated FAQs, rewrites and schema patches with before/after diffs you can apply.",
-  },
-  {
-    icon: "◷",
-    title: "Beat competitors",
-    body: "Share of Voice shows who the AI mentions — you or them — question by question.",
-  },
-  {
-    icon: "∿",
-    title: "Track the trend",
-    body: "Score history per domain proves your fixes actually move the needle.",
-  },
+  { icon: "◉", title: "See what AI sees", body: "Crawl your site the way answer engines do — page types, chunks, schema and all." },
+  { icon: "⚋", title: "Test 5 providers", body: "Ask ChatGPT, Perplexity, Claude, Gemini and Grok real questions about your product." },
+  { icon: "┆", title: "Visibility score", body: "One score across coverage, accuracy, attribution and confidence — tracked over time." },
+  { icon: "✦", title: "Fix the gaps", body: "AI-generated FAQs, rewrites and schema patches with before/after diffs you can apply." },
+  { icon: "◷", title: "Beat competitors", body: "Share of Voice shows who the AI mentions — you or them — question by question." },
+  { icon: "∿", title: "Track the trend", body: "Score history per domain proves your fixes actually move the needle." },
 ];
 
 export default function LandingPage() {
@@ -93,32 +91,43 @@ export default function LandingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-frame text-ink">
+    <div className="min-h-screen bg-pine text-ink">
       {/* Nav */}
       <header className="sticky top-4 z-50 mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-4">
-        <Logo />
-        <nav className="glass hidden items-center gap-1 rounded-full px-2 py-1.5 sm:flex">
-          <a href="#how" className="rounded-full px-4 py-1.5 text-sm text-ink-dim transition-colors hover:text-ink">
-            How it works
-          </a>
-          <a href="#features" className="rounded-full px-4 py-1.5 text-sm text-ink-dim transition-colors hover:text-ink">
-            Features
-          </a>
-          <Link href="/dashboard" className="rounded-full px-4 py-1.5 text-sm text-ink-dim transition-colors hover:text-ink">
-            Dashboard
-          </Link>
-        </nav>
-        <Link
-          href="/login"
-          className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-pine transition-transform hover:scale-[1.03]"
-        >
-          Sign in
+        <Link href="/" aria-label="nayana.ai home">
+          <Logo />
         </Link>
+        <nav className="glass hidden items-center gap-1 rounded-full px-2 py-1.5 sm:flex">
+          {NAV.map((item) => (
+            <a
+              key={item.label}
+              href={item.href}
+              className={
+                "rounded-full px-4 py-1.5 text-sm transition-colors " +
+                (item.active
+                  ? "bg-mint font-semibold text-pine"
+                  : "text-ink-dim hover:text-ink")
+              }
+            >
+              {item.label}
+            </a>
+          ))}
+        </nav>
+        <a
+          href="#hero"
+          onClick={(e) => {
+            e.preventDefault();
+            document.getElementById("hero-input")?.focus();
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          }}
+          className="rounded-full bg-ink px-5 py-2 text-sm font-semibold text-pine transition-transform hover:scale-[1.03]"
+        >
+          Start Free Scan
+        </a>
       </header>
 
       {/* Hero */}
-      <section className="relative overflow-hidden pb-28 pt-24">
-        <DotMatrix opacity={0.7} />
+      <section id="hero" className="relative overflow-hidden pt-24 pb-40">
         <div className="relative mx-auto flex max-w-4xl flex-col items-center px-4 text-center">
           <motion.p
             initial={{ opacity: 0, y: 12 }}
@@ -126,17 +135,17 @@ export default function LandingPage() {
             transition={{ duration: 0.5 }}
             className="glass rounded-full px-4 py-1.5 font-mono text-xs text-mint"
           >
-            AI Visibility &amp; Perception Engine
+            ▪ AI Search Console
           </motion.p>
           <motion.h1
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.55, delay: 0.08 }}
-            className="mt-6 font-display text-5xl font-semibold leading-tight tracking-tight sm:text-7xl"
+            className="mt-6 font-display text-5xl font-semibold leading-[1.05] tracking-tight sm:text-7xl"
           >
             Your Site,
             <br />
-            <span className="text-mint text-glow">As AI Sees It.</span>
+            As AI Sees It.
           </motion.h1>
           <motion.p
             initial={{ opacity: 0, y: 16 }}
@@ -144,12 +153,10 @@ export default function LandingPage() {
             transition={{ duration: 0.55, delay: 0.16 }}
             className="mt-6 max-w-xl text-lg text-ink-dim"
           >
-            Search is becoming answers. nayana.ai measures how ChatGPT,
-            Perplexity, Claude, Gemini and Grok describe you — then helps you
-            fix what they get wrong.
+            Scan your website and test how ChatGPT, Perplexity, Claude, Gemini
+            and Grok answer real questions from your content.
           </motion.p>
 
-          {/* Scan input */}
           <motion.form
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -159,6 +166,7 @@ export default function LandingPage() {
           >
             <span className="pl-3 font-mono text-sm text-ink-dim">https://</span>
             <input
+              id="hero-input"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="yoursite.com"
@@ -168,36 +176,109 @@ export default function LandingPage() {
             <button
               type="submit"
               disabled={busy || !url.trim()}
-              className="glow-mint rounded-full bg-mint px-6 py-2.5 text-sm font-semibold text-pine transition-transform hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-full bg-ink px-6 py-2.5 text-sm font-semibold text-pine transition-transform hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {busy ? "Scanning…" : "Run Free Scan"}
             </button>
           </motion.form>
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              type="button"
+              className="rounded-full border border-line-strong px-5 py-2 text-sm text-ink-dim transition-colors hover:border-mint hover:text-ink"
+              onClick={() => document.getElementById("how")?.scrollIntoView({ behavior: "smooth" })}
+            >
+              See Demo
+            </button>
+            <p className="font-mono text-xs text-ink-dim">
+              5 free scans · no signup needed
+            </p>
+          </div>
           {err && <p className="mt-3 text-sm text-signal">{err}</p>}
-          <p className="mt-3 font-mono text-xs text-ink-dim">
-            5 free scans · no signup needed
-          </p>
+        </div>
 
-          {/* Provider constellation */}
-          <div className="mt-12 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 font-mono text-xs text-ink-dim">
-            {PROVIDERS.map((p, i) => (
-              <span key={p} className="flex items-center gap-6">
-                <span className="transition-colors hover:text-mint">{p}</span>
-                {i < PROVIDERS.length - 1 && <span className="text-mint/40">·</span>}
-              </span>
-            ))}
+        {/* Globe dome + orbiting providers */}
+        <div
+          className="pointer-events-none relative mx-auto mt-16 h-[26rem] w-full max-w-6xl px-4"
+          aria-hidden
+        >
+          <div className="relative h-full w-full">
+            <DotGlobe />
+            {ORBIT.map((chip, i) => {
+              const a = (chip.angleDeg * Math.PI) / 180;
+              const x = 50 + chip.rxPct * Math.cos(a);
+              const y = 100 + chip.ryPct * Math.sin(a); // 100% = dome baseline
+              return (
+                <motion.div
+                  key={chip.provider}
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.6, delay: 0.5 + i * 0.08 }}
+                  className="absolute"
+                  style={{
+                    left: x + "%",
+                    top: y + "%",
+                    transform: "translate(-50%, -50%)",
+                  }}
+                >
+                  <ProviderIcon provider={chip.provider} size={54} glow />
+                </motion.div>
+              );
+            })}
           </div>
         </div>
       </section>
 
-      {/* Curved transition to paper */}
-      <div className="relative">
-        <svg viewBox="0 0 1440 64" className="block w-full" preserveAspectRatio="none" aria-hidden>
-          <path d="M0,64 C480,0 960,0 1440,64 L1440,64 L0,64 Z" fill="var(--ink)" />
+      {/* Curved transition to off-white */}
+      <div className="relative -mt-2">
+        <svg viewBox="0 0 1440 88" className="block w-full" preserveAspectRatio="none" aria-hidden>
+          <path d="M0,88 C420,0 1020,0 1440,88 L1440,88 L0,88 Z" fill="var(--ink)" />
         </svg>
       </div>
 
-      {/* How it works — paper band */}
+      {/* Stat band on paper */}
+      <section className="bg-ink px-4 pt-6 pb-16 text-pine">
+        <div className="mx-auto max-w-5xl text-center">
+          <h2 className="font-display text-3xl font-semibold sm:text-4xl">
+            Built for the AI age. Measured for real.
+          </h2>
+          <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="relative overflow-hidden rounded-2xl bg-pine p-6 text-left text-ink">
+              <p className="text-sm text-ink-dim">AI Visibility Score</p>
+              <p className="mt-1 font-display text-5xl font-semibold">
+                78<span className="text-2xl text-ink-dim">/100</span>
+              </p>
+              <div className="mt-4 flex items-end gap-[3px]">
+                {Array.from({ length: 24 }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={`inline-block w-1.5 rounded-sm ${
+                      i < 18 ? "bg-mint" : "bg-ink/12"
+                    }`}
+                    style={{ height: 8 + (i % 4) * 5 + "px" }}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-pine/10 bg-white/60 p-6 text-left">
+              <p className="text-sm text-pine/70">Content Gaps Found</p>
+              <p className="mt-1 font-display text-5xl font-semibold">12</p>
+              <p className="mt-3 text-xs text-pine/50">
+                Questions where AI answers were weak, hedged or wrong.
+              </p>
+            </div>
+            <div className="rounded-2xl bg-pine p-6 text-left text-ink">
+              <p className="text-sm text-ink-dim">5 LLMs Tested</p>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                {["chatgpt", "perplexity", "claude", "gemini", "grok"].map((p) => (
+                  <ProviderIcon key={p} provider={p} size={34} />
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* How it works */}
       <section id="how" className="bg-ink px-4 py-20 text-pine">
         <div className="mx-auto max-w-6xl">
           <h2 className="font-display text-3xl font-semibold sm:text-4xl">How it works</h2>
@@ -247,14 +328,13 @@ export default function LandingPage() {
       </section>
 
       {/* CTA band */}
-      <section className="relative overflow-hidden bg-pine px-4 py-24">
-        <DotMatrix opacity={0.35} density={18} />
+      <section id="pricing" className="relative overflow-hidden bg-pine px-4 py-24">
         <div className="relative mx-auto flex max-w-3xl flex-col items-center text-center">
           <h2 className="font-display text-3xl font-semibold text-ink sm:text-5xl">
             Know what the machines say about you.
           </h2>
           <a
-            href="#"
+            href="#hero"
             onClick={(e) => {
               e.preventDefault();
               window.scrollTo({ top: 0, behavior: "smooth" });
@@ -267,7 +347,7 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-line bg-frame px-4 py-10">
+      <footer id="footer" className="border-t border-line bg-frame px-4 py-10">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4">
           <Logo size={20} />
           <p className="font-mono text-xs text-ink-dim">

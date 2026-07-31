@@ -1,7 +1,7 @@
 "use client";
 
-// Scan Report — header with domain + status, tab pills hosting
-// Overview / Pages / Test Lab / Gaps / Fixes / Share of Voice.
+// Scan Report — dark ASCII-rain header band with domain + status + tab pills,
+// then the tab body renders on the light app background below.
 // Scan id comes from ?id= (static export → client-side param).
 
 import { Suspense, useCallback, useEffect, useState } from "react";
@@ -9,6 +9,7 @@ import { useSearchParams } from "next/navigation";
 import AppShell from "@/components/nav/AppShell";
 import Logo from "@/components/ui/Logo";
 import { StatusChip } from "@/components/ui/BadgeChip";
+import AsciiRain from "@/components/bg/AsciiRain";
 import { api } from "@/lib/api";
 import type { Scan } from "@/lib/types";
 import { hostOf } from "@/components/dashboard/RecentScans";
@@ -80,39 +81,61 @@ function ScanReport() {
   }
 
   return (
-    <AppShell>
-      {/* Header */}
-      <div className="flex flex-wrap items-center gap-4">
-        <Logo size={22} />
-        <span className="text-sm text-ink-dim">Scan Report</span>
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <h1 className="font-display text-4xl font-semibold text-ink">
-          {hostOf(scan.root_url)}
-        </h1>
-        <StatusChip status={scan.status} />
-      </div>
+    <AppShell fullBleed>
+      {/* Dark header band with ASCII rain backdrop */}
+      <section className="relative overflow-hidden bg-pine">
+        <AsciiRain opacity={0.35} />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(60% 100% at 50% 0%, rgba(169,229,197,0.10), transparent 70%)",
+          }}
+        />
+        <div className="relative mx-auto max-w-6xl px-6 pt-10 pb-8">
+          <div className="flex flex-wrap items-center gap-3">
+            <Logo size={22} />
+            <span className="text-sm text-ink-dim">Scan Report</span>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <h1 className="font-display text-4xl font-semibold text-ink sm:text-5xl">
+              {hostOf(scan.root_url)}
+            </h1>
+            <StatusChip status={scan.status} />
+          </div>
 
-      {/* Tab pills */}
-      <div className="glass mt-6 inline-flex flex-wrap items-center gap-1 rounded-full px-2 py-1.5">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={
-              "rounded-full px-4 py-1.5 text-sm transition-colors " +
-              (tab === t
-                ? "bg-ink font-semibold text-pine"
-                : "text-ink-dim hover:text-ink")
-            }
-          >
-            {t}
-          </button>
-        ))}
-      </div>
+          {/* Tab pills */}
+          <div className="glass-strong mt-8 inline-flex flex-wrap items-center gap-1 rounded-full px-2 py-1.5">
+            {TABS.map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={
+                  "rounded-full px-4 py-1.5 text-sm transition-colors " +
+                  (tab === t
+                    ? "bg-ink font-semibold text-pine"
+                    : "text-ink-dim hover:text-ink")
+                }
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
+        {/* Soft fade into the app background */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-12"
+          style={{
+            background:
+              "linear-gradient(to bottom, transparent, var(--pine) 100%)",
+          }}
+        />
+      </section>
 
       {/* Tab body */}
-      <div className="mt-8">
+      <div className="mx-auto max-w-6xl px-6 py-10">
         {tab === "Overview" && <OverviewTab scan={scan} />}
         {tab === "Pages" && <PagesTab scan={scan} />}
         {tab === "Test Lab" && <TestLabTab scan={scan} />}

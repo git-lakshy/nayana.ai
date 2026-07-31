@@ -79,7 +79,12 @@ export default function OverviewTab({ scan }: { scan: Scan }) {
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       {/* Score panel */}
       <GlassCard className="flex flex-col items-center justify-center py-10">
-        <ScoreGauge score={overall} label="AI Visibility Score" size={240} variant="arc" />
+        <ScoreGauge
+          score={overall}
+          label="AI Visibility Score"
+          size={260}
+          variant="dome"
+        />
         <div className="mt-8 flex w-full max-w-sm flex-col gap-3">
           <ScoreBar label="Coverage" value={overall} />
           <ScoreBar label="Accuracy" value={hasTest ? pct(sig?.avg_accuracy) : null} />
@@ -117,24 +122,42 @@ export default function OverviewTab({ scan }: { scan: Scan }) {
 
         {/* Top gaps */}
         <GlassCard strong>
-          <h3 className="font-display text-lg font-semibold text-ink">Top Content Gaps</h3>
-          <div className="mt-4 flex flex-col gap-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <h3 className="font-display text-lg font-semibold text-ink">
+              Top Content Gaps
+            </h3>
+            {gaps.length > 0 && (
+              <span className="font-mono text-[11px] text-ink-dim">
+                {gaps.length} total
+              </span>
+            )}
+          </div>
+          <div className="mt-4 flex flex-col gap-2">
             {topGaps.length === 0 ? (
               <p className="text-sm text-ink-dim">
-                {gaps.length === 0 ? "No gaps detected — nice coverage. 🎉" : "…"}
+                {gaps.length === 0
+                  ? "No gaps detected — nice coverage. 🎉"
+                  : "…"}
               </p>
             ) : (
               topGaps.map((gap, i) => (
-                <div key={i} className="flex items-center gap-3 text-sm">
+                <div
+                  key={i}
+                  className="flex items-center gap-3 rounded-xl border border-line/60 bg-pine-800/30 px-3 py-2.5 text-sm transition-colors hover:border-mint/40"
+                >
                   <span
                     className="h-2 w-2 shrink-0 rounded-full"
-                    style={{ background: sevColor(gap.severity) }}
+                    style={{
+                      background: sevColor(gap.severity),
+                      boxShadow: "0 0 6px " + sevColor(gap.severity),
+                    }}
                   />
                   <span className="flex-1 text-ink">
                     {gap.question ?? gap.description ?? "Content gap"}
                   </span>
-                  <span className="shrink-0 text-ink-dim">
-                    {gap.pages_affected ?? 0} page{(gap.pages_affected ?? 0) === 1 ? "" : "s"}
+                  <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-ink-dim">
+                    {gap.pages_affected ?? 0} page
+                    {(gap.pages_affected ?? 0) === 1 ? "" : "s"}
                   </span>
                 </div>
               ))

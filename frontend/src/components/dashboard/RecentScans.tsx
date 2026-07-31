@@ -34,9 +34,14 @@ export default function RecentScans({
 
   return (
     <section className="paper mt-10 overflow-hidden">
-      <h2 className="px-6 pt-5 pb-3 font-display text-lg font-semibold text-pine">
-        Recent Scans
-      </h2>
+      <div className="flex flex-wrap items-baseline justify-between gap-2 px-6 pt-5 pb-3">
+        <h2 className="font-display text-lg font-semibold text-pine">
+          Recent Scans
+        </h2>
+        <p className="font-mono text-[11px] text-pine/50">
+          {loading ? "loading…" : scans.length + " total"}
+        </p>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm text-pine">
           <thead>

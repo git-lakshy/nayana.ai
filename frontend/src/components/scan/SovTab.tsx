@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import GlassCard from "@/components/ui/GlassCard";
 import BadgeChip from "@/components/ui/BadgeChip";
+import ProviderIcon from "@/components/ui/ProviderIcon";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { hostOf } from "@/components/dashboard/RecentScans";
@@ -21,6 +22,19 @@ const PROVIDER_LABELS: Record<string, string> = {
   gemini: "Gemini",
   grok: "Grok",
 };
+
+// Rate 0..1 → tone class for the battleground cell.
+function rateTone(rate: number | null | undefined): {
+  cls: string;
+  glyph: string;
+} {
+  if (rate === null || rate === undefined || Number.isNaN(rate))
+    return { cls: "text-pine/30", glyph: "–" };
+  const r = rate <= 1 ? rate : rate / 100;
+  if (r >= 0.6) return { cls: "bg-[#1d7a4f] text-white", glyph: "✓" };
+  if (r >= 0.25) return { cls: "bg-amber/80 text-pine", glyph: "○" };
+  return { cls: "bg-signal/80 text-white", glyph: "✗" };
+}
 
 function pct(v: number | undefined | null): string {
   if (v === undefined || v === null || Number.isNaN(v)) return "—";
@@ -206,37 +220,126 @@ export default function SovTab({ scan }: { scan: Scan }) {
             </div>
           </GlassCard>
 
-          {/* Per-provider battleground */}
+          {/* Per-provider battleground — provider-icon columns × you+competitors rows */}
           <div className="paper overflow-x-auto p-6">
-            <p className="font-display text-lg font-semibold">Provider Battleground</p>
-            <table className="mt-4 w-full min-w-125 text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-pine/50">
-                  <th className="pb-2 pr-4">Provider</th>
-                  <th className="pb-2 pr-4">Your SOV</th>
-                  <th className="pb-2 pr-4">Your brand mentions</th>
-                  <th className="pb-2">Competitor brand mentions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(data?.sov_by_provider ?? {}).map(([prov, row]) => (
-                  <tr key={prov} className="border-t border-pine/10">
-                    <td className="py-2.5 pr-4 font-medium">
-                      {PROVIDER_LABELS[prov] ?? prov}
-                    </td>
-                    <td className="py-2.5 pr-4 font-mono">{pct(row.target_sov)}</td>
-                    <td className="py-2.5 pr-4 font-mono">
-                      {pct(row.target_brand_mention_rate)}
-                    </td>
-                    <td className="py-2.5 font-mono text-pine/70">
-                      {(row.competitor_brand_mention_rates ?? [])
-                        .map((c) => hostOf(c.url) + " " + pct(c.rate))
-                        .join(" · ") || "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="flex items-center justify-between">
+              <p className="font-display text-lg font-semibold">Provider Battleground</p>
+              <p className="text-xs text-pine/60">brand mention rate per provider</p>
+            </div>
+            {(() => {
+              const providers = Object.keys(data?.sov_by_provider ?? {});
+              const competitors = data?.competitors ?? [];
+              return (
+                <table className="mt-5 w-full min-w-150 border-separate border-spacing-y-2 text-sm">
+                  <thead>
+                    <tr>
+                      <th className="w-56 pb-2 text-left text-xs uppercase tracking-wide text-pine/50">
+                        Site
+                      </th>
+                      {providers.map((p) => (
+                        <th key={p} className="pb-2 text-center">
+                          <div className="flex flex-col items-center gap-1">
+                            <ProviderIcon provider={p} size={30} />
+                            <span className="text-[10px] font-medium text-pine/60">
+                              {PROVIDER_LABELS[p] ?? p}
+                            </span>
+                          </div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* You row */}
+                    <tr>
+                      <td className="rounded-l-xl bg-mint/25 py-3 pl-4 pr-3 text-left">
+                        <p className="text-xs uppercase tracking-wide text-[#1d7a4f]">
+                          You
+                        </p>
+                        <p className="truncate font-medium text-pine">
+                          {hostOf(data?.target_url ?? scan.root_url)}
+                        </p>
+                      </td>
+                      {providers.map((p, i) => {
+                        const row = data?.sov_by_provider?.[p];
+                        const tone = rateTone(row?.target_brand_mention_rate);
+                        const isLast = i === providers.length - 1;
+                        return (
+                          <td
+                            key={p}
+                            className={
+                              "px-2 py-3 text-center " +
+                              (isLast ? "rounded-r-xl bg-mint/25" : "bg-mint/25")
+                            }
+                          >
+                            <div
+                              className={
+                                "mx-auto flex h-9 w-14 items-center justify-center gap-1 rounded-full font-mono text-xs font-semibold " +
+                                tone.cls
+                              }
+                            >
+                              <span aria-hidden>{tone.glyph}</span>
+                              <span>{pct(row?.target_brand_mention_rate)}</span>
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                    {/* Competitor rows */}
+                    {competitors.map((c) => (
+                      <tr key={c.scan_id}>
+                        <td className="rounded-l-xl bg-pine/5 py-3 pl-4 pr-3 text-left">
+                          <p className="text-xs uppercase tracking-wide text-pine/50">
+                            Competitor
+                          </p>
+                          <p className="truncate font-medium text-pine">
+                            {hostOf(c.root_url || c.url)}
+                          </p>
+                        </td>
+                        {providers.map((p, i) => {
+                          const m = c.per_provider?.[p];
+                          const tone = rateTone(m?.brand_mention_rate);
+                          const isLast = i === providers.length - 1;
+                          return (
+                            <td
+                              key={p}
+                              className={
+                                "px-2 py-3 text-center bg-pine/5 " +
+                                (isLast ? "rounded-r-xl" : "")
+                              }
+                            >
+                              <div
+                                className={
+                                  "mx-auto flex h-9 w-14 items-center justify-center gap-1 rounded-full font-mono text-xs font-semibold " +
+                                  tone.cls
+                                }
+                              >
+                                <span aria-hidden>{tone.glyph}</span>
+                                <span>{pct(m?.brand_mention_rate)}</span>
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              );
+            })()}
+            {/* Legend */}
+            <div className="mt-4 flex flex-wrap items-center gap-4 text-xs text-pine/60">
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-3 w-3 rounded-full bg-[#1d7a4f]" />
+                strong (≥ 60%)
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-3 w-3 rounded-full bg-amber" />
+                mixed (25–60%)
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-3 w-3 rounded-full bg-signal" />
+                weak (&lt; 25%)
+              </span>
+            </div>
           </div>
 
           {/* Competitor cards */}
@@ -254,8 +357,9 @@ export default function SovTab({ scan }: { scan: Scan }) {
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-ink-dim">
                   {Object.entries(c.per_provider ?? {}).slice(0, 4).map(([prov, m]) => (
-                    <div key={prov} className="flex items-center justify-between rounded-lg border border-line px-3 py-1.5">
-                      <span>{PROVIDER_LABELS[prov] ?? prov}</span>
+                    <div key={prov} className="flex items-center gap-2 rounded-lg border border-line px-3 py-1.5">
+                      <ProviderIcon provider={prov} size={18} />
+                      <span className="flex-1 truncate">{PROVIDER_LABELS[prov] ?? prov}</span>
                       <span className="font-mono text-ink">{pct(m.brand_mention_rate)}</span>
                     </div>
                   ))}

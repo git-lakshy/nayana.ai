@@ -5,9 +5,16 @@ const BLOCKS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 interface SparklineProps {
   data: number[];
   className?: string;
+  // Optional explicit color override — use when the default mint would clash
+  // with the container (e.g. mint-filled selected domain card).
+  color?: string;
 }
 
-export default function Sparkline({ data, className = "" }: SparklineProps) {
+export default function Sparkline({
+  data,
+  className = "",
+  color,
+}: SparklineProps) {
   if (!data.length) {
     return <span className={`font-mono text-ink-dim ${className}`}>—</span>;
   }
@@ -20,8 +27,13 @@ export default function Sparkline({ data, className = "" }: SparklineProps) {
       return BLOCKS[idx];
     })
     .join("");
+  const colorCls = color ? "" : "text-mint";
   return (
-    <span className={`font-mono tracking-tight text-mint ${className}`} aria-hidden>
+    <span
+      className={`font-mono tracking-tight ${colorCls} ${className}`}
+      style={color ? { color } : undefined}
+      aria-hidden
+    >
       {chars}
     </span>
   );
@@ -43,7 +55,8 @@ export function AsciiProgress({
   const filled = Math.round(ratio * width);
   return (
     <span className={`font-mono text-mint ${className}`}>
-      [{"#".repeat(filled)}{".".repeat(Math.max(0, width - filled))}]
+      [{"#".repeat(filled)}
+      {".".repeat(Math.max(0, width - filled))}]
     </span>
   );
 }
