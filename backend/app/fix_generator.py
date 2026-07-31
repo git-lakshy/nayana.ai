@@ -355,12 +355,102 @@ Output ONLY the complete HTML document. No markdown. No explanation."""
     }
 
 
+def _build_answerability_fix(gap: dict, scan_id: int, root_url: str) -> Optional[dict]:
+    """Generic LLM fix builder for AI-aware gap types.
+
+    Handles gaps created from expected question coverage and Test Lab signals:
+    missing_answer, llm_visibility_gap, citation_gap, competitor_gap,
+    accuracy_gap, and confidence_gap.
+    """
+    question = gap.get("question") or ""
+    target_section = gap.get("target_section") or "Answer block"
+    url = gap.get("target_page") or gap.get("url") or root_url
+    title = gap.get("title") or question or "AI visibility gap"
+    gap_type = gap.get("type") or "missing_answer"
+    fix_type = gap.get("fix_type") or "answer_block"
+    providers = ", ".join(gap.get("providers") or []) or "not provider-specific"
+    impact = gap.get("impact_score")
+    evidence = gap.get("evidence") or {}
+    domain = _domain_from_url(root_url)
+    content_ctx = _page_context(scan_id, gap.get("page_id"), url)
+    site_ctx = _scan_context_summary(scan_id)
+
+    prompt = f"""This website has an AEO / AI visibility gap detected by an analyzer.
+
+Site domain: {domain}
+Root URL: {root_url}
+Target page: {url}
+Gap type: {gap_type}
+Fix type: {fix_type}
+Impact score: {impact}
+Affected providers: {providers}
+Question to answer: {question}
+Target section: {target_section}
+Gap description: {gap.get('description') or ''}
+Suggested fix: {gap.get('suggested_fix') or ''}
+Analyzer evidence: {evidence}
+
+Site summary:
+---
+{site_ctx}
+---
+
+Current target page context:
+---
+{content_ctx[:4500]}
+---
+
+Write a production-ready HTML fix that improves answerability for AI engines.
+
+Requirements:
+1. Start with a section heading matching the target section.
+2. Directly answer the question in the first 1-2 sentences, using the domain/brand name explicitly.
+3. Add concrete supporting details from the provided page/site context only. Do not invent unsupported claims.
+4. If the gap is about citation/attribution, include citation-friendly factual wording and recommend metadata/schema signals inside the HTML comments or script where appropriate.
+5. If the gap is about competitors/comparison, write objective positioning language without making unverifiable claims.
+6. If the gap is about accuracy/confidence, create a canonical answer block with precise definitions, constraints, and examples.
+7. Add 3-5 FAQ-style Q&A pairs when useful.
+8. Include JSON-LD when appropriate, especially FAQPage, WebPage, Product, SoftwareApplication, or Organization.
+9. Output only raw HTML / JSON-LD ready to paste. No markdown fences. No explanation.
+"""
+
+    content = _call_llm(prompt)
+    if not content:
+        return None
+
+    labels = {
+        "missing_answer": "Add missing answer block",
+        "llm_visibility_gap": "Improve AI brand visibility",
+        "citation_gap": "Add citation-ready source block",
+        "competitor_gap": "Add comparison positioning",
+        "accuracy_gap": "Add canonical answer",
+        "confidence_gap": "Clarify low-confidence answer",
+    }
+    return {
+        "fix_type": fix_type,
+        "file_hint": url,
+        "title": f"{labels.get(gap_type, 'Fix AI visibility gap')}: {title[:80]}",
+        "description": (
+            f"Generated a targeted {target_section} fix for {gap_type}. "
+            "The content is based on the scanned page/site context and is written for AI answerability."
+        ),
+        "content": content,
+        "language": "html",
+    }
+
+
 _BUILDERS = {
     "thin_content": _build_thin_content_fix,
     "missing_meta": _build_missing_meta_fix,
     "missing_schema": _build_missing_schema_fix,
     "buried_content": _build_buried_content_fix,
     "missing_page_type": _build_missing_page_type_fix,
+    "missing_answer": _build_answerability_fix,
+    "llm_visibility_gap": _build_answerability_fix,
+    "citation_gap": _build_answerability_fix,
+    "competitor_gap": _build_answerability_fix,
+    "accuracy_gap": _build_answerability_fix,
+    "confidence_gap": _build_answerability_fix,
 }
 
 
