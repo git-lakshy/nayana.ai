@@ -1,16 +1,19 @@
 "use client";
 
-// Landing page — dark pine hero with a dot-matrix globe dome, orbiting provider
-// icon chips, curved transition to off-white, stat band, how-it-works terminal
-// demo, features grid, dark CTA band. Hero "Run Free Scan" posts /api/crawl as
-// a guest and redirects to the scan report page.
+// Landing page — dark pine hero with a 3D dot-globe, orbiting provider icon
+// chips on curved SVG paths, curved transition to off-white, stat band,
+// how-it-works terminal demo, features grid, dark CTA band.
+//
+// Hero shows two clean buttons ("Run Free Scan" + "See Demo"). Clicking Run
+// Free Scan reveals an inline URL pill; submitting posts /api/crawl as a guest
+// and redirects to the scan report page.
 
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import Logo from "@/components/ui/Logo";
-import DotGlobe from "@/components/bg/DotGlobe";
+import OrbitGlobe from "@/components/bg/OrbitGlobe";
 import ProviderIcon from "@/components/ui/ProviderIcon";
 import TerminalPanel from "@/components/ui/TerminalPanel";
 import { api, ApiError } from "@/lib/api";
@@ -23,20 +26,6 @@ const NAV = [
   { label: "Pricing", href: "#pricing" },
   { label: "Resources", href: "#how" },
   { label: "Company", href: "#footer" },
-];
-
-// Provider chips orbit the globe on gently rotating elliptical arcs.
-const ORBIT: {
-  provider: string;
-  angleDeg: number; // 0 = right, 90 = bottom, -90 = top
-  rxPct: number; // ellipse rx as % of viewport width
-  ryPct: number; // ellipse ry as % of viewport width
-}[] = [
-  { provider: "chatgpt", angleDeg: -155, rxPct: 46, ryPct: 22 },
-  { provider: "claude", angleDeg: -18, rxPct: 46, ryPct: 22 },
-  { provider: "perplexity", angleDeg: 170, rxPct: 32, ryPct: 34 },
-  { provider: "grok", angleDeg: 30, rxPct: 40, ryPct: 30 },
-  { provider: "gemini", angleDeg: -95, rxPct: 22, ryPct: 46 },
 ];
 
 const DEMO_LINES = [
@@ -65,6 +54,8 @@ export default function LandingPage() {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const runScan = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,7 +64,9 @@ export default function LandingPage() {
     setBusy(true);
     setErr(null);
     try {
-      const normalized = /^https?:\/\//i.test(target) ? target : "https://" + target;
+      const normalized = /^https?:\/\//i.test(target)
+        ? target
+        : "https://" + target;
       const d = await api.post<CrawlResponse>("/api/crawl", {
         root_url: normalized,
         max_pages: 10,
@@ -90,14 +83,23 @@ export default function LandingPage() {
     }
   };
 
+  const openScan = () => {
+    setScanOpen(true);
+    setTimeout(() => document.getElementById("hero-input")?.focus(), 80);
+  };
+
   return (
     <div className="min-h-screen bg-pine text-ink">
       {/* Nav */}
-      <header className="sticky top-4 z-50 mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-4">
+      <header className="sticky top-3 z-50 mx-auto flex w-full max-w-6xl items-center justify-between gap-2 px-3 sm:top-4 sm:gap-4 sm:px-4">
         <Link href="/" aria-label="nayana.ai home">
           <Logo />
         </Link>
-        <nav className="glass hidden items-center gap-1 rounded-full px-2 py-1.5 sm:flex">
+
+        <nav
+          className="glass hidden items-center gap-1 rounded-full px-2 py-1.5 md:flex"
+          style={{ backgroundColor: "rgba(10, 20, 17, 0.88)" }}
+        >
           {NAV.map((item) => (
             <a
               key={item.label}
@@ -113,135 +115,208 @@ export default function LandingPage() {
             </a>
           ))}
         </nav>
-        <a
-          href="#hero"
-          onClick={(e) => {
-            e.preventDefault();
-            document.getElementById("hero-input")?.focus();
-            window.scrollTo({ top: 0, behavior: "smooth" });
-          }}
-          className="rounded-full bg-ink px-5 py-2 text-sm font-semibold text-pine transition-transform hover:scale-[1.03]"
-        >
-          Start Free Scan
-        </a>
+
+        <div className="flex items-center gap-2">
+          <a
+            href="#hero"
+            onClick={(e) => {
+              e.preventDefault();
+              openScan();
+              window.scrollTo({ top: 0, behavior: "smooth" });
+            }}
+            className="hidden rounded-full bg-ink px-5 py-2 text-sm font-semibold text-pine transition-transform hover:scale-[1.03] sm:inline-block"
+          >
+            Start Free Scan
+          </a>
+          {/* Mobile hamburger */}
+          <button
+            type="button"
+            aria-label="Toggle menu"
+            aria-expanded={mobileMenuOpen}
+            onClick={() => setMobileMenuOpen((v) => !v)}
+            className="glass flex h-10 w-10 items-center justify-center rounded-full md:hidden"
+          >
+            <div className="flex flex-col gap-[3px]">
+              <span className="block h-[2px] w-4 bg-ink" />
+              <span className="block h-[2px] w-4 bg-ink" />
+              <span className="block h-[2px] w-4 bg-ink" />
+            </div>
+          </button>
+        </div>
       </header>
 
+      {/* Mobile menu overlay */}
+      <AnimatePresence>
+        {mobileMenuOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.2 }}
+            className="fixed top-16 left-3 right-3 z-40 md:hidden"
+          >
+            <div className="glass-strong flex flex-col gap-1 rounded-2xl p-3">
+              {NAV.map((item) => (
+                <a
+                  key={item.label}
+                  href={item.href}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={
+                    "rounded-xl px-4 py-2 text-sm transition-colors " +
+                    (item.active
+                      ? "bg-mint font-semibold text-pine"
+                      : "text-ink-dim hover:bg-pine-800 hover:text-ink")
+                  }
+                >
+                  {item.label}
+                </a>
+              ))}
+              <a
+                href="#hero"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setMobileMenuOpen(false);
+                  openScan();
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+                className="mt-1 rounded-xl bg-ink px-4 py-2 text-center text-sm font-semibold text-pine"
+              >
+                Start Free Scan
+              </a>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Hero */}
-      <section id="hero" className="relative overflow-hidden pt-24 pb-40">
-        <div className="relative mx-auto flex max-w-4xl flex-col items-center px-4 text-center">
+      <section
+        id="hero"
+        className="relative overflow-hidden pt-16 pb-32 sm:pt-24 sm:pb-40"
+      >
+        <div className="relative z-10 mx-auto flex max-w-4xl flex-col items-center px-4 text-center">
           <motion.p
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5 }}
-            className="glass rounded-full px-4 py-1.5 font-mono text-xs text-mint"
+            className="glass rounded-full px-4 py-1.5 font-mono text-[11px] text-mint sm:text-xs"
           >
-            ▪ AI Search Console
+            <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-mint align-middle" />
+            AI Search Console
           </motion.p>
           <motion.h1
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.55, delay: 0.08 }}
-            className="mt-6 font-display text-5xl font-semibold leading-[1.05] tracking-tight sm:text-7xl"
+            className="mt-5 font-display text-4xl font-semibold leading-[1.05] tracking-tight sm:mt-6 sm:text-6xl md:text-7xl"
           >
             Your Site,
             <br />
-            As AI Sees It.
+            As AI Sees It
           </motion.h1>
           <motion.p
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.55, delay: 0.16 }}
-            className="mt-6 max-w-xl text-lg text-ink-dim"
+            className="mt-5 max-w-md text-sm text-ink-dim sm:mt-6 sm:max-w-xl sm:text-base"
           >
             Scan your website and test how ChatGPT, Perplexity, Claude, Gemini
             and Grok answer real questions from your content.
           </motion.p>
 
-          <motion.form
+          {/* Two-button hero CTA */}
+          <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.55, delay: 0.24 }}
-            onSubmit={runScan}
-            className="glass-strong mt-10 flex w-full max-w-xl items-center gap-2 rounded-full p-2"
+            className="mt-7 flex flex-wrap items-center justify-center gap-3 sm:mt-9"
           >
-            <span className="pl-3 font-mono text-sm text-ink-dim">https://</span>
-            <input
-              id="hero-input"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="yoursite.com"
-              aria-label="Website URL"
-              className="min-w-0 flex-1 bg-transparent font-mono text-sm text-ink outline-none placeholder:text-ink-dim/60"
-            />
-            <button
-              type="submit"
-              disabled={busy || !url.trim()}
-              className="rounded-full bg-ink px-6 py-2.5 text-sm font-semibold text-pine transition-transform hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {busy ? "Scanning…" : "Run Free Scan"}
-            </button>
-          </motion.form>
-          <div className="mt-3 flex items-center gap-3">
             <button
               type="button"
-              className="rounded-full border border-line-strong px-5 py-2 text-sm text-ink-dim transition-colors hover:border-mint hover:text-ink"
-              onClick={() => document.getElementById("how")?.scrollIntoView({ behavior: "smooth" })}
+              onClick={openScan}
+              className="rounded-full bg-ink px-6 py-2.5 text-sm font-semibold text-pine shadow-lg shadow-black/20 transition-transform hover:scale-[1.03] sm:px-7 sm:py-3"
+            >
+              Run Free Scan
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                document
+                  .getElementById("how")
+                  ?.scrollIntoView({ behavior: "smooth" })
+              }
+              className="rounded-full border border-line-strong bg-white/[0.02] px-6 py-2.5 text-sm text-ink transition-colors hover:border-mint hover:text-mint sm:px-7 sm:py-3"
             >
               See Demo
             </button>
-            <p className="font-mono text-xs text-ink-dim">
-              5 free scans · no signup needed
-            </p>
-          </div>
-          {err && <p className="mt-3 text-sm text-signal">{err}</p>}
+          </motion.div>
+
+          {/* URL input reveals on Run Free Scan click */}
+          <AnimatePresence>
+            {scanOpen && (
+              <motion.form
+                initial={{ opacity: 0, y: -6, height: 0 }}
+                animate={{ opacity: 1, y: 0, height: "auto" }}
+                exit={{ opacity: 0, y: -6, height: 0 }}
+                transition={{ duration: 0.28, ease: [0.22, 0.9, 0.28, 1] }}
+                onSubmit={runScan}
+                className="glass-strong mt-5 flex w-full max-w-xl items-center gap-2 overflow-hidden rounded-full p-2"
+              >
+                <span className="pl-3 font-mono text-sm text-ink-dim">
+                  https://
+                </span>
+                <input
+                  id="hero-input"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="yoursite.com"
+                  aria-label="Website URL"
+                  className="min-w-0 flex-1 bg-transparent font-mono text-sm text-ink outline-none placeholder:text-ink-dim/60"
+                />
+                <button
+                  type="submit"
+                  disabled={busy || !url.trim()}
+                  className="rounded-full bg-mint px-5 py-2 text-sm font-semibold text-pine transition-transform hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {busy ? "Scanning…" : "Go"}
+                </button>
+              </motion.form>
+            )}
+          </AnimatePresence>
+
+          <p className="mt-3 font-mono text-[11px] text-ink-dim sm:text-xs">
+            5 free scans · no signup needed
+          </p>
+          {err && <p className="mt-2 text-sm text-signal">{err}</p>}
         </div>
 
-        {/* Globe dome + orbiting providers */}
-        <div
-          className="pointer-events-none relative mx-auto mt-16 h-[26rem] w-full max-w-6xl px-4"
-          aria-hidden
-        >
-          <div className="relative h-full w-full">
-            <DotGlobe />
-            {ORBIT.map((chip, i) => {
-              const a = (chip.angleDeg * Math.PI) / 180;
-              const x = 50 + chip.rxPct * Math.cos(a);
-              const y = 100 + chip.ryPct * Math.sin(a); // 100% = dome baseline
-              return (
-                <motion.div
-                  key={chip.provider}
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ duration: 0.6, delay: 0.5 + i * 0.08 }}
-                  className="absolute"
-                  style={{
-                    left: x + "%",
-                    top: y + "%",
-                    transform: "translate(-50%, -50%)",
-                  }}
-                >
-                  <ProviderIcon provider={chip.provider} size={54} glow />
-                </motion.div>
-              );
-            })}
-          </div>
+        {/* WebGL dot-globe with orbiting provider chips */}
+        <div className="relative mx-auto mt-6 w-full max-w-4xl px-2 sm:mt-10 sm:px-4">
+          <OrbitGlobe />
         </div>
       </section>
 
       {/* Curved transition to off-white */}
       <div className="relative -mt-2">
-        <svg viewBox="0 0 1440 88" className="block w-full" preserveAspectRatio="none" aria-hidden>
-          <path d="M0,88 C420,0 1020,0 1440,88 L1440,88 L0,88 Z" fill="var(--ink)" />
+        <svg
+          viewBox="0 0 1440 88"
+          className="block w-full"
+          preserveAspectRatio="none"
+          aria-hidden
+        >
+          <path
+            d="M0,88 C420,0 1020,0 1440,88 L1440,88 L0,88 Z"
+            fill="var(--ink)"
+          />
         </svg>
       </div>
 
       {/* Stat band on paper */}
       <section className="bg-ink px-4 pt-6 pb-16 text-pine">
         <div className="mx-auto max-w-5xl text-center">
-          <h2 className="font-display text-3xl font-semibold sm:text-4xl">
+          <h2 className="font-display text-2xl font-semibold sm:text-4xl">
             Built for the AI age. Measured for real.
           </h2>
-          <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="mt-8 grid grid-cols-1 gap-4 sm:mt-10 sm:grid-cols-3">
             <div className="relative overflow-hidden rounded-2xl bg-pine p-6 text-left text-ink">
               <p className="text-sm text-ink-dim">AI Visibility Score</p>
               <p className="mt-1 font-display text-5xl font-semibold">
@@ -269,9 +344,11 @@ export default function LandingPage() {
             <div className="rounded-2xl bg-pine p-6 text-left text-ink">
               <p className="text-sm text-ink-dim">5 LLMs Tested</p>
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                {["chatgpt", "perplexity", "claude", "gemini", "grok"].map((p) => (
-                  <ProviderIcon key={p} provider={p} size={34} />
-                ))}
+                {["chatgpt", "perplexity", "claude", "gemini", "grok"].map(
+                  (p) => (
+                    <ProviderIcon key={p} provider={p} size={34} />
+                  )
+                )}
               </div>
             </div>
           </div>
@@ -279,38 +356,60 @@ export default function LandingPage() {
       </section>
 
       {/* How it works */}
-      <section id="how" className="bg-ink px-4 py-20 text-pine">
+      <section id="how" className="bg-ink px-4 py-16 text-pine sm:py-20">
         <div className="mx-auto max-w-6xl">
-          <h2 className="font-display text-3xl font-semibold sm:text-4xl">How it works</h2>
-          <div className="mt-10 grid grid-cols-1 items-center gap-10 lg:grid-cols-2">
+          <h2 className="font-display text-2xl font-semibold sm:text-4xl">
+            How it works
+          </h2>
+          <div className="mt-8 grid grid-cols-1 items-center gap-10 sm:mt-10 lg:grid-cols-2">
             <ol className="flex flex-col gap-6">
               {[
-                ["Crawl", "We fetch your site like an answer engine — respecting robots, classifying page types, extracting chunks."],
-                ["Ask", "Real questions are generated from your content and put to 5 AI providers."],
-                ["Score", "Answers are graded on coverage, accuracy, attribution and confidence."],
-                ["Fix", "Gap analysis turns weak answers into ready-to-apply content fixes."],
+                [
+                  "Crawl",
+                  "We fetch your site like an answer engine — respecting robots, classifying page types, extracting chunks.",
+                ],
+                [
+                  "Ask",
+                  "Real questions are generated from your content and put to 5 AI providers.",
+                ],
+                [
+                  "Score",
+                  "Answers are graded on coverage, accuracy, attribution and confidence.",
+                ],
+                [
+                  "Fix",
+                  "Gap analysis turns weak answers into ready-to-apply content fixes.",
+                ],
               ].map(([title, body], i) => (
                 <li key={title} className="flex gap-4">
-                  <span className="font-mono text-sm font-bold text-pine/40">0{i + 1}</span>
+                  <span className="font-mono text-sm font-bold text-pine/40">
+                    0{i + 1}
+                  </span>
                   <div>
-                    <p className="font-display text-lg font-semibold">{title}</p>
+                    <p className="font-display text-lg font-semibold">
+                      {title}
+                    </p>
                     <p className="mt-1 text-sm text-pine/70">{body}</p>
                   </div>
                 </li>
               ))}
             </ol>
-            <TerminalPanel lines={DEMO_LINES} maxHeight={320} className="shadow-2xl" />
+            <TerminalPanel
+              lines={DEMO_LINES}
+              maxHeight={320}
+              className="shadow-2xl"
+            />
           </div>
         </div>
       </section>
 
       {/* Features grid */}
-      <section id="features" className="bg-ink px-4 pb-24 text-pine">
+      <section id="features" className="bg-ink px-4 pb-20 text-pine sm:pb-24">
         <div className="mx-auto max-w-6xl">
-          <h2 className="font-display text-3xl font-semibold sm:text-4xl">
+          <h2 className="font-display text-2xl font-semibold sm:text-4xl">
             Everything between you and the answer
           </h2>
-          <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-8 grid grid-cols-1 gap-4 sm:mt-10 sm:grid-cols-2 lg:grid-cols-3">
             {FEATURES.map((f) => (
               <div
                 key={f.title}
@@ -319,8 +418,12 @@ export default function LandingPage() {
                 <p className="font-mono text-2xl text-[#1d7a4f]" aria-hidden>
                   {f.icon}
                 </p>
-                <p className="mt-3 font-display text-lg font-semibold">{f.title}</p>
-                <p className="mt-1.5 text-sm leading-relaxed text-pine/70">{f.body}</p>
+                <p className="mt-3 font-display text-lg font-semibold">
+                  {f.title}
+                </p>
+                <p className="mt-1.5 text-sm leading-relaxed text-pine/70">
+                  {f.body}
+                </p>
               </div>
             ))}
           </div>
@@ -328,21 +431,24 @@ export default function LandingPage() {
       </section>
 
       {/* CTA band */}
-      <section id="pricing" className="relative overflow-hidden bg-pine px-4 py-24">
+      <section
+        id="pricing"
+        className="relative overflow-hidden bg-pine px-4 py-20 sm:py-24"
+      >
         <div className="relative mx-auto flex max-w-3xl flex-col items-center text-center">
           <h2 className="font-display text-3xl font-semibold text-ink sm:text-5xl">
             Know what the machines say about you.
           </h2>
-          <a
-            href="#hero"
-            onClick={(e) => {
-              e.preventDefault();
+          <button
+            type="button"
+            onClick={() => {
+              openScan();
               window.scrollTo({ top: 0, behavior: "smooth" });
             }}
             className="glow-mint mt-8 rounded-full bg-mint px-8 py-3 font-semibold text-pine transition-transform hover:scale-[1.04]"
           >
             Run your free scan
-          </a>
+          </button>
         </div>
       </section>
 
@@ -354,8 +460,12 @@ export default function LandingPage() {
             ▁▃▅▇ nayana.ai — AI visibility engine
           </p>
           <div className="flex gap-5 text-sm text-ink-dim">
-            <Link href="/dashboard" className="hover:text-ink">Dashboard</Link>
-            <Link href="/login" className="hover:text-ink">Sign in</Link>
+            <Link href="/dashboard" className="hover:text-ink">
+              Dashboard
+            </Link>
+            <Link href="/login" className="hover:text-ink">
+              Sign in
+            </Link>
           </div>
         </div>
       </footer>

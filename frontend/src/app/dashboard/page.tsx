@@ -16,7 +16,7 @@ import { api } from "@/lib/api";
 import type { Scan } from "@/lib/types";
 
 export default function DashboardPage() {
-  const { identity, isGuest } = useAuth();
+  const { identity, user, isGuest } = useAuth();
   const [scans, setScans] = useState<Scan[]>([]);
   const [loading, setLoading] = useState(true);
   const [latestScore, setLatestScore] = useState<number | null>(null);
@@ -97,7 +97,7 @@ export default function DashboardPage() {
   const quotaRemaining = identity?.guest_scans_remaining ?? null;
   const quotaLimit = identity?.guest_scan_limit ?? 5;
 
-  const displayName = identity?.email?.split("@")[0] ?? (isGuest ? "guest" : "there");
+  const displayName = user?.email?.split("@")[0] ?? (isGuest ? "guest" : "there");
 
   return (
     <AppShell>
