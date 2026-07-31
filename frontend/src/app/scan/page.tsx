@@ -136,7 +136,9 @@ function ScanReport() {
 
       {/* Tab body */}
       <div className="mx-auto max-w-6xl px-6 py-10">
-        {tab === "Overview" && <OverviewTab scan={scan} />}
+        {tab === "Overview" && (
+          <OverviewTab scan={scan} onOpenTab={setTab} />
+        )}
         {tab === "Pages" && <PagesTab scan={scan} />}
         {tab === "Test Lab" && <TestLabTab scan={scan} />}
         {tab === "Gaps" && <GapsTab scan={scan} />}
