@@ -17,6 +17,9 @@ next-env.d.ts
 .pnp
 .pnp.*
 
+backend/static/
+
+
 # ── Env & secrets ──────────────────────────────────
 .env
 .env.*
