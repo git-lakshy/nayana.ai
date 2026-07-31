@@ -248,3 +248,57 @@ export interface ApiErrorShape {
   scans_used?: number;
   limit?: number;
 }
+
+// --- Share of Voice (GET /api/sov/{scan_id}) ---
+
+export interface SovProviderMetric {
+  total_answers: number;
+  errors: number;
+  avg_confidence?: number;
+  avg_attribution?: number;
+  brand_mention_rate?: number;
+  domain_citation_rate?: number;
+  competitor_mention_rate?: number;
+  refusal_rate?: number;
+}
+
+export interface SovCompetitor {
+  scan_id: number;
+  url: string;
+  root_url: string;
+  per_provider: Record<string, SovProviderMetric>;
+}
+
+export interface SovCompare {
+  scan_id: number;
+  target_url: string;
+  competitor_count: number;
+  overall_target_sov: number;
+  overall_target_brand_mention_rate: number;
+  sov_by_provider: Record<
+    string,
+    {
+      target_brand_mention_rate: number;
+      competitor_brand_mention_rates: { url: string; rate: number }[];
+      target_sov: number;
+    }
+  >;
+  target_per_provider: Record<string, SovProviderMetric>;
+  competitors: SovCompetitor[];
+}
+
+// One row of GET /api/domains/{domain}/history (score_history JOIN scans).
+export interface ScoreHistoryRow {
+  scan_id: number;
+  domain: string;
+  recorded_at: string;
+  gap_count?: number;
+  fix_count?: number;
+  applied_fix_count?: number;
+  avg_confidence?: number | null;
+  avg_attribution?: number | null;
+  avg_accuracy?: number | null;
+  ai_coverage_score: number;
+  root_url?: string;
+  scan_started_at?: string;
+}

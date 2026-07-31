@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.responses import RedirectResponse, Response
 
 from backend.app.registry import AgentRegistry, AgentCard
 from backend.app import db as sqlite_db
@@ -45,6 +45,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Admin subdomain: requests arriving on admin.<domain> are routed to the
+# admin console. The SPA is a static export, so we redirect any non-API,
+# non-asset path on the admin host to /admin/ (e.g. admin.nayana.ai -> /admin/).
+# API calls and static assets pass through untouched.
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def admin_subdomain_redirect(request: Request, call_next):
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host.startswith("admin."):
+        path = request.url.path
+        is_api = path.startswith("/api")
+        is_asset = path.startswith("/_next") or ("." in path.rsplit("/", 1)[-1])
+        is_admin = path.startswith("/admin")
+        if not (is_api or is_asset or is_admin):
+            return RedirectResponse(url="/admin/", status_code=307)
+    return await call_next(request)
+
 
 # ---------------------------------------------------------------------------
 # Startup: initialise SQLite schema (idempotent)
@@ -135,15 +156,43 @@ def _get_owned_scan(scan_id: int, identity: auth.Identity) -> dict:
     return scan
 
 
+def _admin_emails() -> set:
+    """Deployer-controlled admin allowlist: NAYANA_ADMIN_EMAILS is a
+    comma-separated list of emails (case-insensitive). Only accounts whose
+    email is listed here (or whose plan grants the 'admin' feature) may use
+    admin endpoints. This is the ONLY way to become admin in production —
+    it is set by whoever deploys the server, so admin access stays with the
+    owner/deployer."""
+    return {
+        e.strip().lower()
+        for e in os.getenv("NAYANA_ADMIN_EMAILS", "").split(",")
+        if e.strip()
+    }
+
+
 async def require_admin(
     request: Request,
     identity: auth.Identity = Depends(auth.get_optional_identity),
 ) -> auth.Identity:
     """Gate for admin-only endpoints (browser LLM auth management, key
-    diagnostics). Allowed for identities with the 'admin' feature, or — in dev
-    mode only (NAYANA_ENV != 'prod') — for requests from the local machine."""
+    diagnostics). Allowed for:
+    - identities with the 'admin' feature (admin plan), or
+    - authenticated users whose email is in NAYANA_ADMIN_EMAILS (deployer
+      allowlist), or
+    - in dev mode only (NAYANA_ENV != 'prod'), requests from the local
+      machine. NOTE: tunnels (ngrok etc.) forward as 127.0.0.1 — set
+      NAYANA_ENV=prod whenever the server is exposed beyond localhost."""
     if identity.has_feature("admin"):
         return identity
+    # Deployer allowlist: the owner/deployer lists their own email(s) in
+    # NAYANA_ADMIN_EMAILS at launch. No self-serve path grants admin.
+    if identity.is_authenticated and identity.user_id:
+        allow = _admin_emails()
+        if allow:
+            user = auth_db.get_user_by_id(identity.user_id)
+            email = (user.get("email") or "").strip().lower() if user else ""
+            if email and email in allow:
+                return identity
     client_host = request.client.host if request.client else ""
     if os.getenv("NAYANA_ENV", "dev").strip().lower() != "prod" \
             and client_host in ("127.0.0.1", "::1", "localhost"):
